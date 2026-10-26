@@ -18,6 +18,7 @@ PUBLIC_DOCS = {
     'getting-started.md', 'known-limitations.md', 'releasing.md',
     'product-installation.md', 'development-history.md', 'assistant-backup.md',
 }
+PUBLIC_IMAGES = {'docs/images/dashboard.png'}
 SOURCE_DIRS = {'src', 'tests', 'web', 'packaging', 'scripts', '.github'}
 SOURCE_SUFFIXES = {'.cs', '.csproj', '.props', '.targets', '.xaml', '.manifest',
                    '.py', '.ps1', '.cmd', '.mjs', '.js', '.html', '.css', '.iss',
@@ -51,7 +52,9 @@ def selected_files() -> list[Path]:
             continue
         if relative.name == 'VALIDATION.md':
             continue
-        if relative.parts[0] == 'docs':
+        if relative.as_posix() in PUBLIC_IMAGES:
+            allowed = True
+        elif relative.parts[0] == 'docs':
             allowed = len(relative.parts) == 2 and relative.name in PUBLIC_DOCS
         elif len(relative.parts) == 1:
             allowed = relative.name in ROOT_FILES or (relative.suffix in SOURCE_SUFFIXES and relative.suffix != '.md')
@@ -61,7 +64,7 @@ def selected_files() -> list[Path]:
             continue
         if re.search(r'(?i)(credentials|\.state$|^data-directory\.txt$|^settings\.json$|^dashboard\.settings\.json$)', relative.name):
             raise ValueError(f'User-state filename in source inventory: {name}')
-        content = source.read_text(encoding='utf-8-sig')
+        content = '' if relative.as_posix() in PUBLIC_IMAGES else source.read_text(encoding='utf-8-sig')
         if any(pattern.search(content) for pattern in SECRET_PATTERNS):
             raise ValueError(f'Potential credential material in {name}; review before export')
         selected.append(relative)

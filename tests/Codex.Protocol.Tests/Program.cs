@@ -11,6 +11,7 @@ if (!OperatingSystem.IsWindows())
     Console.Error.WriteLine("Windows is required for the real current-user named-pipe tests.");
     return 2;
 }
+if (args is ["--constrained-client-child"]) return await Tests.RunConstrainedClientChildAsync();
 if (args is ["--serve", var childName])
 {
     using var shutdown = new CancellationTokenSource();
@@ -48,6 +49,7 @@ internal static class Tests
         ("idle_timeout_reclaims_slot", IdleTimeout),
         ("request_limit_closes_connection", RequestLimit),
         ("concurrent_clients_and_serialized_client_calls", ConcurrentClients),
+        ("concurrent_clients_do_not_starve_a_constrained_thread_pool", ConstrainedClientProcess),
         ("noncooperative_provider_calls_stay_bounded", BoundedProviders),
         ("shutdown_releases_connected_and_waiting_workers", Shutdown),
         ("duplicate_server_cannot_take_existing_endpoint", DuplicateServer),
@@ -299,6 +301,70 @@ internal static class Tests
             await using var client = await host.Connect();
             await Task.WhenAll(client.GetHealthAsync(), client.GetHealthAsync(), client.GetCapabilitiesAsync());
         }));
+    }
+
+    internal static async Task<int> RunConstrainedClientChildAsync()
+    {
+        // Windows ConnectAsync queues blocking connection waits on the pool. Keep this
+        // limit in a child so the test cannot change another case's scheduling policy.
+        ThreadPool.GetMinThreads(out _, out var minimumIo);
+        ThreadPool.GetMaxThreads(out _, out var maximumIo);
+        Check(ThreadPool.SetMinThreads(2, minimumIo));
+        Check(ThreadPool.SetMaxThreads(4, maximumIo));
+        using var completed = new ManualResetEventSlim();
+        var watchdog = new Thread(() =>
+        {
+            if (!completed.Wait(TimeSpan.FromSeconds(8))) Environment.Exit(3);
+        }) { IsBackground = true };
+        watchdog.Start();
+        try
+        {
+            await ConcurrentClients();
+            Console.WriteLine("CONSTRAINED CLIENTS PASS");
+            return 0;
+        }
+        catch (Exception error)
+        {
+            Console.Error.WriteLine(error);
+            return 1;
+        }
+        finally
+        {
+            completed.Set();
+            watchdog.Join();
+        }
+    }
+
+    private static async Task ConstrainedClientProcess()
+    {
+        var start = new ProcessStartInfo(Environment.ProcessPath!)
+        {
+            UseShellExecute = false, CreateNoWindow = true,
+            RedirectStandardOutput = true, RedirectStandardError = true
+        };
+        if (Path.GetFileNameWithoutExtension(start.FileName).Equals("dotnet", StringComparison.OrdinalIgnoreCase))
+            start.ArgumentList.Add(Assembly.GetExecutingAssembly().Location);
+        start.ArgumentList.Add("--constrained-client-child");
+        start.Environment["DOTNET_PROCESSOR_COUNT"] = "2";
+        using var child = Process.Start(start) ?? throw new InvalidOperationException("Could not start constrained client test.");
+        var output = child.StandardOutput.ReadToEndAsync();
+        var error = child.StandardError.ReadToEndAsync();
+        try
+        {
+            await child.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+            var report = await output;
+            var failure = await error;
+            if (child.ExitCode != 0) throw new InvalidOperationException("Constrained client failed: " + failure);
+            Check(report.Contains("CONSTRAINED CLIENTS PASS", StringComparison.Ordinal));
+        }
+        finally
+        {
+            if (!child.HasExited)
+            {
+                child.Kill(entireProcessTree: true);
+                await child.WaitForExitAsync();
+            }
+        }
     }
 
     private static async Task BoundedProviders()

@@ -45,7 +45,7 @@ public sealed class LocalProtocolClient : IAsyncDisposable, IDisposable
         try
         {
             using var connect = LocalProtocolServer.Deadline(cancellationToken, options.ConnectTimeout);
-            try { await pipe.ConnectAsync(connect.Token).ConfigureAwait(false); }
+            try { await ConnectWithoutBlockingWorkersAsync(pipe, connect.Token).ConfigureAwait(false); }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
             {
                 throw new ProtocolException(ProtocolErrors.Timeout, "The local endpoint did not connect before the deadline.");
@@ -77,6 +77,27 @@ public sealed class LocalProtocolClient : IAsyncDisposable, IDisposable
         {
             client.Dispose();
             throw;
+        }
+    }
+
+    private static async Task ConnectWithoutBlockingWorkersAsync(NamedPipeClientStream pipe, CancellationToken cancellationToken)
+    {
+        // Windows ConnectAsync schedules a blocking wait on the shared thread pool.
+        // A burst can occupy the workers needed by the server and handshake callbacks.
+        // Keep the existing overall deadline, but bound each native wait and yield
+        // between attempts. A positive timeout avoids Windows' default wait for zero.
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                pipe.Connect(1);
+                return;
+            }
+            catch (TimeoutException)
+            {
+                await Task.Delay(10, cancellationToken).ConfigureAwait(false);
+            }
         }
     }
 

@@ -1,5 +1,7 @@
 # Codex Dashboard
 
+[![Windows quality checks](https://github.com/BeteixZ/CodexDashboard/actions/workflows/ci.yml/badge.svg)](https://github.com/BeteixZ/CodexDashboard/actions/workflows/ci.yml)
+
 在 Windows 桌面集中查看 Codex 任务，并通过独立助手查询进展、管理提醒和安排后续工作。
 
 这是社区项目，与 OpenAI 无隶属关系。当前版本为 **v0.1.0 预发行版**，适合试用和反馈；复杂控制、恢复和长期运行仍有待验证。
@@ -12,6 +14,10 @@
 | **Codex 助手** | 微信问答与任务查询、ChatGPT 账户登录、长期记忆、提醒与订阅、文件处理，以及按配置开放的 Codex 任务控制。 |
 
 两者分别安装、运行和保存数据。只需要监控时可以只装 Dashboard；关闭其中一个不会自动退出另一个。本机配对只交换健康和能力状态，不传递聊天正文或凭据。
+
+![Codex Dashboard 界面示例](docs/images/dashboard.png)
+
+界面示例使用合成任务，不包含真实会话。安装后可按自己的主机、项目和任务筛选。
 
 ## 安装
 

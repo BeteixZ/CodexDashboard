@@ -1,0 +1,192 @@
+name: Build and release Windows packages
+
+on:
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version (for example 0.1.0); a new tag is created after validation
+        required: true
+        default: 0.1.0
+        type: string
+      publish:
+        description: Publish the validated draft as a prerelease
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.event_name == 'workflow_dispatch' && format('v{0}', inputs.version) || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  quality:
+    uses: ./.github/workflows/ci.yml
+    with:
+      ref: ${{ github.sha }}
+
+  packages:
+    needs: quality
+    runs-on: windows-2025
+    timeout-minutes: 50
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && format('v{0}', inputs.version) || github.ref_name }}
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: 10.0.x
+      - name: Validate release tag
+        run: |
+          if ($env:RELEASE_TAG -notmatch '^v\d+\.\d+\.\d+$') { throw 'Use a stable numeric version tag; publication is marked prerelease separately.' }
+          $version = $env:RELEASE_TAG.Substring(1)
+          "PRODUCT_VERSION=$version" >> $env:GITHUB_ENV
+      - name: Build standalone packages and installers
+        run: |
+          $compiler = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6/ISCC.exe'
+          if (!(Test-Path -LiteralPath $compiler)) { throw 'The Windows runner is missing the documented Inno Setup compiler.' }
+          ./Build-Release.ps1 -Version $env:PRODUCT_VERSION -OutputDirectory (Join-Path $env:RUNNER_TEMP 'release-build') -InnoCompilerPath $compiler
+      - name: Validate release inventory, runtimes, portable files and hashes
+        run: |
+          ./tests/ReleasePackaging.Tests.ps1 -ReleaseDirectory (Join-Path $env:RUNNER_TEMP 'release-build/release') -PackageDirectory (Join-Path $env:RUNNER_TEMP 'release-build/packages') -OutputDirectory (Join-Path $env:RUNNER_TEMP 'release-package-checks')
+      - name: Test native Setup install, upgrade, occupancy rejection and data preservation
+        run: |
+          $compiler = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6/ISCC.exe'
+          ./tests/InnoInstaller.Tests.ps1 -PackageDirectory (Join-Path $env:RUNNER_TEMP 'release-build/packages') -InnoCompilerPath $compiler -OutputDirectory (Join-Path $env:RUNNER_TEMP 'inno-installer-checks') -Version $env:PRODUCT_VERSION
+      - name: Test isolated install, upgrade and uninstall
+        run: |
+          ./tests/Install-Product.Tests.ps1 -BuildDirectory (Join-Path $env:RUNNER_TEMP 'release-build/packages') -OutputDirectory (Join-Path $env:RUNNER_TEMP 'installation-checks')
+      - name: Test installed product isolation
+        run: |
+          dotnet build tests/Product.Lifecycle.Tests/Product.Lifecycle.Tests.csproj -c Release -m:1 -nr:false --nologo
+          if ($LASTEXITCODE -ne 0) { throw 'Lifecycle test build failed.' }
+          $assembly = 'tests/Product.Lifecycle.Tests/bin/Release/net10.0/Product.Lifecycle.Tests.dll'
+          dotnet $assembly --self-test --output (Join-Path $env:RUNNER_TEMP 'lifecycle-safety-checks')
+          if ($LASTEXITCODE -ne 0) { throw 'Lifecycle safety checks failed.' }
+          dotnet $assembly --dashboard-package (Join-Path $env:RUNNER_TEMP 'release-build/packages/dashboard') --assistant-package (Join-Path $env:RUNNER_TEMP 'release-build/packages/assistant') --output (Join-Path $env:RUNNER_TEMP 'installed-lifecycle-checks') --installer-only
+          if ($LASTEXITCODE -ne 0) { throw 'Installed product isolation checks failed.' }
+      - name: Retain release files
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-release
+          path: ${{ runner.temp }}/release-build/release/*
+          if-no-files-found: error
+          retention-days: 14
+      - name: Retain packaging evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-packaging-evidence
+          path: |
+            ${{ runner.temp }}/installation-checks/checks.json
+            ${{ runner.temp }}/release-package-checks/checks.json
+            ${{ runner.temp }}/inno-installer-checks/checks.json
+            ${{ runner.temp }}/lifecycle-safety-checks/*.json
+            ${{ runner.temp }}/installed-lifecycle-checks/results.json
+            ${{ runner.temp }}/installed-lifecycle-checks/preflight.json
+          if-no-files-found: warn
+          retention-days: 14
+
+  release:
+    needs: [quality, packages]
+    runs-on: windows-2025
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && format('v{0}', inputs.version) || github.ref_name }}
+      RELEASE_COMMIT: ${{ github.sha }}
+      PUBLISH_RELEASE: ${{ github.event_name == 'push' || inputs.publish }}
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: windows-release
+          path: release
+      - name: Validate assets, create draft, verify uploaded bytes, then publish
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:RELEASE_TAG -notmatch '^v\d+\.\d+\.\d+$') { throw 'Invalid release tag.' }
+          $version = $env:RELEASE_TAG.Substring(1)
+          $expected = @(
+            "CodexDashboard-$version-win-x64-Setup.exe",
+            "CodexAssistant-$version-win-x64-Setup.exe",
+            "CodexDashboard-$version-win-x64-portable.zip",
+            "CodexAssistant-$version-win-x64-portable.zip",
+            'release-manifest.json', 'SHA256SUMS.txt'
+          )
+          $files = @(Get-ChildItem -LiteralPath release -File)
+          if ($files.Count -ne $expected.Count -or @(Compare-Object ($files.Name | Sort-Object) ($expected | Sort-Object)).Count -ne 0) { throw 'Unexpected release inventory.' }
+          $hashes = @{}
+          foreach ($line in Get-Content -LiteralPath release/SHA256SUMS.txt) {
+            if ($line -notmatch '^([0-9a-fA-F]{64})\s+\*?([^/\\]+)$') { throw 'Invalid checksum entry.' }
+            $name = $Matches[2]
+            if ($name -notin $expected -or $name -eq 'SHA256SUMS.txt' -or $hashes.ContainsKey($name)) { throw 'Invalid checksum inventory.' }
+            $hashes[$name] = $Matches[1]
+            if ((Get-FileHash -LiteralPath (Join-Path release $name) -Algorithm SHA256).Hash -ne $hashes[$name]) { throw "Checksum mismatch: $name" }
+          }
+          if ($hashes.Count -ne 5) { throw 'Checksums must cover both installers, both portable packages and release metadata.' }
+          $manifest = Get-Content -LiteralPath release/release-manifest.json -Raw | ConvertFrom-Json
+          if (![string]::Equals($manifest.sourceRevision, $env:RELEASE_COMMIT, [StringComparison]::Ordinal)) { throw 'Release source revision does not match the exact tested commit.' }
+          if ($manifest.sourceDirty -isnot [bool] -or $manifest.sourceDirty -ne $false) { throw 'Release packages must be built from a clean committed checkout.' }
+          if ($manifest.version -ne $version) { throw 'Release manifest version does not match the requested release.' }
+          $tagText = gh api "repos/$env:GH_REPO/git/ref/tags/$env:RELEASE_TAG" 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            $tagObject = ($tagText | ConvertFrom-Json).object
+            while ($tagObject.type -eq 'tag') {
+              $tagText = gh api "repos/$env:GH_REPO/git/tags/$($tagObject.sha)"
+              if ($LASTEXITCODE -ne 0) { throw 'Cannot verify the annotated release tag.' }
+              $tagObject = ($tagText | ConvertFrom-Json).object
+            }
+            if ($tagObject.type -ne 'commit' -or $tagObject.sha -ne $env:RELEASE_COMMIT) { throw 'The existing tag points at different source; it is preserved.' }
+          }
+          $notes = @(
+            "Codex Dashboard and Codex Assistant $env:RELEASE_TAG for Windows x64 (prerelease).",
+            '',
+            'Download the Setup.exe for the product you need, or extract its portable.zip into a new folder.',
+            'The packages include .NET and local Python. Remote collection still needs OpenSSH, existing key access and remote Python.',
+            'The two products install independently. Existing production assistant data is not automatically migrated.',
+            '',
+            'Automated checks cover isolated synthetic fixtures, package integrity, native Setup installation, upgrade, occupied-file rejection and data-preserving uninstall with test-only registration, script installation and installed product isolation.',
+            'The release manifest is required to identify the exact tested source commit and a clean working tree.',
+            'They do not replace real phone/SSH acceptance, a normal desktop installer click-through, or long-running recovery validation.',
+            'The installers are currently unsigned. Compare downloads with SHA256SUMS.txt.',
+            '',
+            "Source and validation run: $env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
+          )
+          $notes | Set-Content -LiteralPath release-notes.md -Encoding utf8
+          $existingText = gh release view $env:RELEASE_TAG --json isDraft,assets 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            $existing = $existingText | ConvertFrom-Json
+            if (!$existing.isDraft -or @($existing.assets).Count -ne 0) { throw 'Existing public release or populated draft is preserved; use a new version or review the existing draft manually.' }
+          } else {
+            gh release create $env:RELEASE_TAG --target $env:RELEASE_COMMIT --draft --prerelease --title "Codex Dashboard $env:RELEASE_TAG" --notes-file release-notes.md
+            if ($LASTEXITCODE -ne 0) { throw 'Draft creation failed.' }
+          }
+          gh release upload $env:RELEASE_TAG @($files.FullName)
+          if ($LASTEXITCODE -ne 0) { throw 'Asset upload failed; the release remains a draft.' }
+          gh release download $env:RELEASE_TAG --dir downloaded
+          if ($LASTEXITCODE -ne 0) { throw 'Uploaded asset verification could not download the draft; it remains unpublished.' }
+          $downloaded = @(Get-ChildItem -LiteralPath downloaded -File)
+          if ($downloaded.Count -ne 6) { throw 'Uploaded inventory differs from the validated bundle.' }
+          foreach ($file in $files) {
+            if ((Get-FileHash -LiteralPath $file.FullName).Hash -ne (Get-FileHash -LiteralPath (Join-Path downloaded $file.Name)).Hash) { throw "Uploaded bytes differ: $($file.Name)" }
+          }
+          if ($env:PUBLISH_RELEASE -eq 'true') {
+            gh release edit $env:RELEASE_TAG --draft=false --prerelease --latest=false
+            if ($LASTEXITCODE -ne 0) { throw 'Publication failed; inspect the draft before retrying.' }
+          }

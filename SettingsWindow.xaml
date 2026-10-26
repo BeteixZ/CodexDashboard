@@ -1,0 +1,60 @@
+<Window x:Class="CodexDashboard.SettingsWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Title="设置 · Codex Dashboard" Style="{StaticResource ShellWindow}" ThemeMode="Light" Width="650" Height="720" MinWidth="560" MinHeight="580" WindowStartupLocation="CenterOwner" ShowInTaskbar="False">
+ <DockPanel Margin="28">
+  <TextBlock DockPanel.Dock="Top" Text="设置" FontSize="26" FontWeight="SemiBold" Margin="0,0,0,22"/>
+  <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,20,0,0"><Button Content="取消" Click="CancelClicked" Padding="18,7" Margin="0,0,10,0"/><Button Content="保存设置" Click="SaveClicked" Padding="18,7"/></StackPanel>
+  <TabControl x:Name="SettingsTabs" BorderThickness="0" Background="Transparent">
+   <TabItem Header="HUD 与提醒"><ScrollViewer VerticalScrollBarVisibility="Auto" Padding="2,20,12,0"><StackPanel>
+    <TextBlock Text="显示模式" Style="{StaticResource SectionTitle}"/>
+    <RadioButton x:Name="CompactModeBox" GroupName="HudMode" Content="桌面紧凑 HUD · 彩色圆点 + 项目名" Margin="0,8"/>
+    <RadioButton x:Name="MiniModeBox" GroupName="HudMode" Content="超 mini · 只在系统托盘显示彩色圆点" Margin="0,8"/>
+    <TextBlock Text="绿：运行　黄：等待　蓝：结束　红：失败　灰：待确认" Style="{StaticResource MutedText}" FontSize="12" Margin="0,12,0,20"/>
+    <WrapPanel><CheckBox x:Name="HudVisibleBox" Content="显示桌面 HUD" Margin="0,5,20,10"/><CheckBox x:Name="TopmostBox" Content="置顶" Margin="0,5,20,10"/><CheckBox x:Name="ThroughBox" Content="鼠标穿透" Margin="0,5,0,10"/></WrapPanel>
+    <TextBlock Text="穿透开启后，可从系统托盘恢复鼠标交互。" Style="{StaticResource MutedText}" FontSize="12"/>
+    <Grid Margin="0,23,0,0" ColumnDefinitions="110,*,45"><TextBlock Text="不透明度" VerticalAlignment="Center"/><Slider x:Name="OpacitySlider" Grid.Column="1" Minimum="0.35" Maximum="1" TickFrequency="0.05" IsSnapToTickEnabled="True"/><TextBlock Grid.Column="2" Text="{Binding ElementName=OpacitySlider,Path=Value,StringFormat=P0}" HorizontalAlignment="Right"/></Grid>
+    <Grid Margin="0,20,0,0" ColumnDefinitions="110,*,45"><TextBlock Text="任务行数" VerticalAlignment="Center"/><Slider x:Name="RowsSlider" Grid.Column="1" Minimum="1" Maximum="6" TickFrequency="1" IsSnapToTickEnabled="True"/><TextBlock Grid.Column="2" Text="{Binding ElementName=RowsSlider,Path=Value,StringFormat=F0}" HorizontalAlignment="Right"/></Grid>
+    <Button Content="重置 HUD 位置" Click="ResetPosition" HorizontalAlignment="Left" Margin="0,20,0,0"/>
+    <Separator Margin="0,24"/><TextBlock Text="提醒" Style="{StaticResource SectionTitle}"/>
+    <CheckBox x:Name="NotifyBox" Content="任务结束或等待输入时弹出提醒" Margin="0,8"/><CheckBox x:Name="SoundBox" Content="播放提示音" Margin="0,8"/>
+   </StackPanel></ScrollViewer></TabItem>
+   <TabItem Header="网页监控"><ScrollViewer VerticalScrollBarVisibility="Auto" Padding="2,20,12,0"><StackPanel>
+    <TextBlock Text="从另一台电脑查看进展" Style="{StaticResource SectionTitle}"/>
+    <CheckBox x:Name="WebEnabledBox" Content="启用网页监控" Margin="0,8"/><CheckBox x:Name="LanEnabledBox" Content="允许局域网 / VPN 访问" Margin="0,8"/>
+    <TextBlock x:Name="WebStateText" Style="{StaticResource MutedText}" FontSize="12" Margin="0,10,0,18"/>
+    <TextBlock Text="连接地址" Margin="0,0,0,7"/><TextBox x:Name="AddressBox" IsReadOnly="True" Padding="10,8"/>
+    <WrapPanel Margin="0,10,0,18"><Button Content="复制连接链接" Click="CopyLinkClicked" Margin="0,0,8,0"/><Button Content="在本机打开" Click="OpenWebClicked"/></WrapPanel>
+    <TextBlock Text="访问密钥（支持手动输入或生成，至少 4 字符）" Margin="0,0,0,7"/>
+    <Grid Margin="0,0,0,8">
+        <PasswordBox x:Name="AccessKeyBox" Padding="10,8" PasswordChanged="AccessKeyBox_PasswordChanged"/>
+        <TextBox x:Name="AccessKeyTextBox" Padding="10,8" Visibility="Collapsed" TextChanged="AccessKeyTextBox_TextChanged"/>
+    </Grid>
+    <WrapPanel Margin="0,4,0,18">
+        <Button Content="复制密钥" Click="CopyKeyClicked" Margin="0,0,8,0"/>
+        <Button x:Name="ToggleVisibilityButton" Content="显示明文" Click="ToggleVisibilityClicked" Margin="0,0,8,0"/>
+        <Button x:Name="RotateKeyButton" Content="生成随机密钥" Click="RotateKeyClicked"/>
+    </WrapPanel>
+    <Grid ColumnDefinitions="100,*" Margin="0,4,0,18"><TextBlock Text="监听端口" VerticalAlignment="Center"/><TextBox x:Name="PortBox" Grid.Column="1" Width="110" HorizontalAlignment="Left" Padding="10,7"/></Grid>
+    <TextBlock Text="连接链接包含访问密钥，请只交给自己的设备。HTTP 页面仅用于信任的局域网或 VPN；离开此电脑前需保持监控程序运行。" Style="{StaticResource MutedText}" FontSize="12" Margin="0,0,0,18"/>
+    <Button Content="允许防火墙中的局域网访问…" Click="FirewallClicked" HorizontalAlignment="Left"/>
+    <TextBlock Text="如果另一台电脑无法连接，可运行上面的配置。Windows 会请求管理员权限；规则仅允许此程序的指定端口和私网地址。" Style="{StaticResource MutedText}" FontSize="12" Margin="0,10,0,0"/>
+   </StackPanel></ScrollViewer></TabItem>
+   <TabItem Header="个人助手"><StackPanel Margin="2,20,12,0">
+    <TextBlock Text="微信与个人助手" Style="{StaticResource SectionTitle}"/>
+    <TextBlock Text="微信、模型、记忆与任务控制由独立助手管理。关闭监控台后，助手仍可运行。" Style="{StaticResource MutedText}" Margin="0,8,0,18"/>
+    <TextBlock x:Name="AssistantStatusText" Text="正在读取助手状态…" Style="{StaticResource MutedText}" Margin="0,0,0,18"/>
+    <Button Content="打开助手…" Click="OpenAssistantClicked" HorizontalAlignment="Left"/>
+   </StackPanel></TabItem>
+   <TabItem Header="数据源"><ScrollViewer VerticalScrollBarVisibility="Auto" Padding="2,20,12,0"><StackPanel>
+    <TextBlock Text="监控台实际保存位置" Margin="0,0,0,7"/>
+    <TextBox x:Name="ActualDataDirectoryBox" IsReadOnly="True" TextWrapping="Wrap" Padding="10,8"/>
+    <TextBlock Text="监控台配置保存在这里。更改下方采集来源不会移动本目录。" Style="{StaticResource MutedText}" FontSize="12" Margin="0,6,0,14"/>
+    <CheckBox x:Name="LocalBox" Content="监控本机" Margin="0,8,0,16"/>
+    <TextBlock Text="本机 Python 路径" Margin="0,0,0,7"/><TextBox x:Name="PythonBox" Padding="10,8"/>
+    <TextBlock Text="Codex 数据目录" Margin="0,18,0,7"/><TextBox x:Name="HomeBox" Padding="10,8"/>
+    <TextBlock Text="远程 SSH 别名" Margin="0,18,0,7"/><TextBox x:Name="HostsBox" Padding="10,8"/>
+    <TextBlock Text="多个别名以逗号分隔；留空可关闭远程监控。" Style="{StaticResource MutedText}" FontSize="12" Margin="0,8,0,20"/>
+    <Grid ColumnDefinitions="110,*,45" Margin="0,10,0,20"><TextBlock Text="刷新间隔（秒）" VerticalAlignment="Center"/><Slider x:Name="RefreshSlider" Grid.Column="1" Minimum="5" Maximum="60" TickFrequency="5" IsSnapToTickEnabled="True"/><TextBlock Grid.Column="2" Text="{Binding ElementName=RefreshSlider,Path=Value,StringFormat=F0}" HorizontalAlignment="Right"/></Grid>
+    <TextBlock Text="远程使用已有 SSH 密钥与 python3，不安装额外远程服务。" Style="{StaticResource MutedText}" FontSize="12"/>
+   </StackPanel></ScrollViewer></TabItem>
+  </TabControl>
+ </DockPanel>
+</Window>

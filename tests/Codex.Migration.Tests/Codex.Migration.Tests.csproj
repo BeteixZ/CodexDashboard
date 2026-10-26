@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/Codex.Migration/Codex.Migration.csproj" />
+    <Compile Include="../../src/Assistant.Windows/MigrationPreviewModel.cs" Link="MigrationPreviewModel.cs" />
+  </ItemGroup>
+</Project>

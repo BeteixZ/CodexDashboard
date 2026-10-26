@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><title>Codex Dashboard · 网页监控</title><link rel="stylesheet" href="/app.css"><script type="module" src="/app.js"></script></head>
+<body>
+ <main id="login" class="login-wrap">
+  <form id="login-form" class="login-card">
+   <span class="app-mark" aria-hidden="true">◈</span><h1>连接监控台</h1><p class="muted">在桌面程序的“网页监控”设置中复制访问密钥。</p>
+   <label for="access-key">访问密钥</label><input id="access-key" type="password" autocomplete="off" spellcheck="false" required autofocus>
+   <button class="primary" id="connect" type="submit">连接</button><p id="login-error" class="error" role="alert"></p><p class="caption">仅用于你信任的局域网或 VPN。密钥仅保留在当前浏览器会话。</p>
+  </form>
+ </main>
+ <div id="workspace" class="workspace" hidden>
+  <aside class="sidebar"><div class="brand"><span class="app-mark" aria-hidden="true">◈</span><strong>Codex Dashboard</strong></div><div class="nav-caption">项目</div><nav id="projects" aria-label="项目筛选"></nav><div class="connections"><div class="nav-caption">连接</div><div id="hosts"></div><p class="caption">只读监控</p></div></aside>
+  <main class="main">
+   <header class="page-header"><div><p class="eyebrow">工作区 / 网页监控</p><h1>任务概览</h1></div><div class="actions"><button id="refresh">刷新</button><button id="logout">断开</button></div></header>
+   <section class="metrics" aria-label="工作状态"><div><span class="dot active"></span>运行中 <strong id="active-count">0</strong></div><div><span class="dot waiting"></span>需要关注 <strong id="attention-count">0</strong></div><div><span class="dot completed"></span>今日结束 <strong id="completed-count">0</strong></div><span class="caption" id="source-count"></span></section>
+   <div id="connection-status" class="notice" role="status">正在读取…</div>
+   <section class="toolbar" aria-label="筛选任务"><input id="search" type="search" placeholder="搜索项目、任务或进展" aria-label="搜索任务"><select id="host-filter" aria-label="机器"><option value="">全部机器</option></select><select id="status-filter" aria-label="状态"><option value="recent">最近 7 天</option><option value="all">全部任务</option><option value="active">运行中</option><option value="attention">需要关注</option><option value="completed">本轮结束</option><option value="unknown">状态待确认</option></select></section>
+   <div class="content"><section class="task-pane" aria-label="任务列表"><div id="task-count" class="list-caption"></div><div id="tasks" class="task-list"></div><p id="empty" class="empty" hidden>没有符合筛选条件的任务</p></section><section id="detail" class="detail" aria-label="任务详情"><p class="empty">选择任务查看进展</p></section></div>
+   <footer><span id="updated"></span><span>会话记录 · 本轮结束不等于项目完成</span></footer>
+  </main>
+ </div>
+</body></html>

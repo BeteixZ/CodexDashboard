@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>CodexAssistant</AssemblyName>
+    <ApplicationManifest>../../app.manifest</ApplicationManifest>
+  </PropertyGroup>
+  <ItemGroup>
+    <Page Remove="AssistantApp.xaml" />
+    <ApplicationDefinition Include="AssistantApp.xaml" />
+    <ProjectReference Include="../Codex.ReadOnly/Codex.ReadOnly.csproj" />
+    <ProjectReference Include="../Codex.Protocol/Codex.Protocol.csproj" />
+    <ProjectReference Include="../Codex.Migration/Codex.Migration.csproj" />
+    <ProjectReference Include="../Assistant.Core/Assistant.Core.csproj" />
+    <ProjectReference Include="../Codex.Control/Codex.Control.csproj" />
+    <PackageReference Include="QRCoder" Version="1.8.1" />
+    <PackageReference Include="PdfPig" Version="0.1.16" />
+    <PackageReference Include="Microsoft.IdentityModel.JsonWebTokens" Version="8.23.0" />
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <Compile Include="../../ProductStatusBridge.cs" Link="ProductStatusBridge.cs" />
+    <Compile Include="../../ProductLifecycleTest.cs" Link="ProductLifecycleTest.cs" />
+    <Content Include="../../collector.py" Link="collector.py" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="../../remote_socket_proxy.py" Link="remote_socket_proxy.py" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="../../THIRD-PARTY-NOTICES.txt" Link="THIRD-PARTY-NOTICES.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

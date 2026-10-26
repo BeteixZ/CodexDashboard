@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/Assistant.Core/Assistant.Core.csproj" />
+    <ProjectReference Include="../../src/Codex.Control/Codex.Control.csproj" />
+    <Compile Include="../../src/Assistant.Windows/WindowsStateProtector.cs" Link="WindowsStateProtector.cs" />
+    <Compile Include="../../src/Assistant.Windows/OwnedControlRuntime.cs" Link="OwnedControlRuntime.cs" />
+    <Compile Include="../../src/Assistant.Windows/OwnedCommitmentObservation.cs" Link="OwnedCommitmentObservation.cs" />
+    <Compile Include="../../src/Assistant.Windows/OwnedDependentWork.cs" Link="OwnedDependentWork.cs" />
+    <Compile Include="../../src/Assistant.Windows/OwnedDependencyCommands.cs" Link="OwnedDependencyCommands.cs" />
+    <Compile Include="../../src/Assistant.Windows/OwnedReportText.cs" Link="OwnedReportText.cs" />
+    <Compile Include="../../src/Assistant.Windows/WorkspaceWriteCoordinator.cs" Link="WorkspaceWriteCoordinator.cs" />
+    <Compile Include="../../src/Assistant.Windows/OwnedControlToolAdapter.cs" Link="OwnedControlToolAdapter.cs" />
+    <Compile Include="../../src/Assistant.Windows/OwnedControlAdapterTests.cs" Link="OwnedControlAdapterTests.cs" />
+    <Compile Include="../../src/Assistant.Windows/OwnedControlConfiguration.cs" Link="OwnedControlConfiguration.cs" />
+    <Compile Include="../../src/Assistant.Windows/OwnedControlConfigurationTests.cs" Link="OwnedControlConfigurationTests.cs" />
+  </ItemGroup>
+</Project>

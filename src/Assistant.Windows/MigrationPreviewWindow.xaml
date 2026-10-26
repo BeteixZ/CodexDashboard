@@ -1,0 +1,41 @@
+<Window x:Class="CodexDashboard.MigrationPreviewWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+ xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Title="迁移检查 · Codex 助手" Style="{StaticResource ShellWindow}"
+ ThemeMode="Light" Width="760" Height="760" MinWidth="620" MinHeight="600" WindowStartupLocation="CenterScreen">
+ <DockPanel Margin="26">
+  <StackPanel DockPanel.Dock="Top">
+   <TextBlock Text="迁移检查" FontSize="26" FontWeight="SemiBold"/>
+   <TextBlock Text="检查你选定的目录与交接记录。凭据内容保持封存，当前页面只提供预览。" Style="{StaticResource MutedText}" Margin="0,8,0,18"/>
+  </StackPanel>
+  <StackPanel DockPanel.Dock="Bottom" Margin="0,16,0,0">
+   <TextBlock Text="正式迁移尚未开放：仍需完成旧程序停机、写入排他与授权兼容性验收。" Style="{StaticResource MutedText}" FontSize="12" Margin="0,0,0,10"/>
+   <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+    <Button x:Name="CheckButton" Content="检查所选目录" Click="CheckClicked" Padding="18,7" Margin="0,0,10,0"/>
+    <Button Content="关闭" Click="CloseClicked" Padding="18,7"/>
+   </StackPanel>
+  </StackPanel>
+  <ScrollViewer VerticalScrollBarVisibility="Auto">
+   <StackPanel Margin="0,0,10,0">
+    <TextBlock Text="旧数据目录" FontWeight="SemiBold" Margin="0,0,0,6"/>
+    <DockPanel><Button DockPanel.Dock="Right" Content="选择…" Tag="source" Click="BrowseClicked" Margin="8,0,0,0"/><TextBox x:Name="SourceBox" Padding="8,6"/></DockPanel>
+    <TextBlock Text="旧安装目录（可选，用于核对它记录的数据位置）" Margin="0,14,0,6"/>
+    <DockPanel><Button DockPanel.Dock="Right" Content="选择…" Tag="installation" Click="BrowseClicked" Margin="8,0,0,0"/><TextBox x:Name="InstallationBox" Padding="8,6"/></DockPanel>
+    <TextBlock Text="新助手数据目录" FontWeight="SemiBold" Margin="0,14,0,6"/>
+    <DockPanel><Button DockPanel.Dock="Right" Content="选择…" Tag="target" Click="BrowseClicked" Margin="8,0,0,0"/><TextBox x:Name="TargetBox" Padding="8,6"/></DockPanel>
+    <TextBlock Text="备份与事务目录（单独保存，不能位于前两个目录内）" FontWeight="SemiBold" Margin="0,14,0,6"/>
+    <DockPanel><Button DockPanel.Dock="Right" Content="选择…" Tag="transaction" Click="BrowseClicked" Margin="8,0,0,0"/><TextBox x:Name="TransactionBox" Padding="8,6"/></DockPanel>
+    <Border BorderBrush="{StaticResource Line}" BorderThickness="1" Background="{StaticResource Panel}" CornerRadius="7" Padding="16" Margin="0,20,0,0">
+     <StackPanel>
+      <TextBlock x:Name="SummaryText" Text="填写目录后可检查文件类别、交接阶段和回滚条件。" TextWrapping="Wrap" FontWeight="SemiBold"/>
+      <TextBlock x:Name="ResolvedSourceText" Style="{StaticResource MutedText}" Margin="0,10,0,0"/>
+      <TextBlock x:Name="CandidatesText" Style="{StaticResource MutedText}" Margin="0,6,0,0"/>
+      <ItemsControl x:Name="CategoriesList" Margin="0,10,0,0">
+       <ItemsControl.ItemTemplate><DataTemplate><DockPanel Margin="0,3"><TextBlock DockPanel.Dock="Right" Text="{Binding Count}" Margin="18,0,0,0"/><TextBlock Text="{Binding Name}"/></DockPanel></DataTemplate></ItemsControl.ItemTemplate>
+      </ItemsControl>
+      <TextBlock x:Name="PhaseText" TextWrapping="Wrap" Margin="0,12,0,0"/>
+      <TextBlock x:Name="RollbackText" Style="{StaticResource MutedText}" Margin="0,8,0,0"/>
+     </StackPanel>
+    </Border>
+   </StackPanel>
+  </ScrollViewer>
+ </DockPanel>
+</Window>

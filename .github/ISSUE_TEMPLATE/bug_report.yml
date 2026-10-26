@@ -1,0 +1,41 @@
+name: Bug report / 故障反馈
+description: Report a reproducible problem in Codex Dashboard or Codex Assistant.
+body:
+  - type: markdown
+    attributes:
+      value: 请勿提交账号令牌、凭据文件、微信私人消息、完整用户数据目录或未脱敏日志。
+  - type: dropdown
+    id: product
+    attributes:
+      label: Product / 产品
+      options:
+        - Codex Dashboard
+        - Codex Assistant
+        - Installer / 安装升级
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version and Windows version / 软件和 Windows 版本
+      placeholder: v0.1.0, Windows 11 x64
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction steps / 重现步骤
+      description: 说明安装方式、所用功能，以及问题出现前的操作。
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected and actual behavior / 预期与实际结果
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Sanitized diagnostics / 脱敏诊断
+      description: 如涉及发送或控制，请区分接口受理、任务实际生效和手机实际收到；只提供必要且脱敏的错误信息。

@@ -1,0 +1,91 @@
+<Window x:Class="CodexDashboard.AssistantSettingsWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Title="设置 · Codex 助手" Style="{StaticResource ShellWindow}" ThemeMode="Light" Width="650" Height="720" MinWidth="560" MinHeight="580" WindowStartupLocation="CenterOwner" ShowInTaskbar="False">
+ <DockPanel Margin="28">
+  <TextBlock DockPanel.Dock="Top" Text="设置" FontSize="26" FontWeight="SemiBold" Margin="0,0,0,22"/>
+  <StackPanel DockPanel.Dock="Bottom" Margin="0,20,0,0">
+   <TextBlock x:Name="SaveStatusText" Visibility="Collapsed" TextWrapping="Wrap" FontSize="12" Margin="0,0,0,10"/>
+   <StackPanel Orientation="Horizontal" HorizontalAlignment="Right"><Button Content="取消" Click="CancelClicked" Padding="18,7" Margin="0,0,10,0"/><Button Content="保存设置" Click="SaveClicked" Padding="18,7"/></StackPanel>
+  </StackPanel>
+  <TabControl x:Name="SettingsTabs" BorderThickness="0" Background="Transparent">
+   <TabItem x:Name="WeChatTab" Header="微信通知"><ScrollViewer x:Name="WeChatScrollViewer" VerticalScrollBarVisibility="Auto" Padding="2,20,12,0"><StackPanel>
+    <TextBlock Text="微信 ClawBot" Style="{StaticResource SectionTitle}"/>
+    <TextBlock Text="扫码连接后，可在微信查询进度并接收状态变化。电脑与助手需要保持运行。" Style="{StaticResource MutedText}" FontSize="12" Margin="0,6,0,12"/>
+    <CheckBox x:Name="ClawEnabledBox" Content="启用 ClawBot 通知与只读查询" Margin="0,6"/>
+    <TextBlock x:Name="ClawStateText" TextWrapping="Wrap" FontSize="12" Margin="0,5,0,10"/>
+    <WrapPanel><Button x:Name="BindClawButton" Content="扫码连接…" Click="BindClawClicked" Margin="0,0,8,0"/><Button Content="测试通知" Click="TestClawClicked" Margin="0,0,8,0"/><Button Content="清除本机绑定" Click="ClearClawClicked"/></WrapPanel>
+    <TextBlock Text="微信指令：状态、运行中、需要关注、最近完成、查看 关键词、报告、报告列表、帮助。长时间没有互动后，主动通知可能受限；可先发一条消息再查询。" Style="{StaticResource MutedText}" FontSize="12" Margin="0,12,0,0"/>
+    <Separator Margin="0,18"/>
+    <TextBlock Text="公众号通知 · pushplus（可选）" Style="{StaticResource SectionTitle}"/>
+    <CheckBox x:Name="PushEnabledBox" Content="通过 pushplus 微信公众号发送简短唤醒提示" Margin="0,10,0,6"/>
+    <TextBlock Text="微信正文因会话上下文不可用而待补报时，只提示你回来查看，正文不会转发到 pushplus。请先在 pushplus 配置接收微信并获取令牌；推送受服务额度限制。" Style="{StaticResource MutedText}" FontSize="12" Margin="0,4,0,8"/>
+    <PasswordBox x:Name="PushTokenBox" Padding="10,7" MaxLength="512"/>
+    <StackPanel x:Name="PushTokenRecoveryPanel" Visibility="Collapsed" Margin="0,8,0,0">
+     <TextBlock Text="原令牌无法读取。普通保存不会覆盖它；重新输入令牌后，请明确选择替换，再保存设置。" Style="{StaticResource MutedText}" FontSize="12"/>
+     <Button Content="替换无法读取的令牌" Click="ReplaceUnreadablePushTokenClicked" HorizontalAlignment="Left" Margin="0,6,0,0"/>
+     <TextBlock x:Name="PushTokenRecoveryText" TextWrapping="Wrap" FontSize="12" Margin="0,5,0,0"/>
+    </StackPanel>
+    <CheckBox x:Name="WakeQuietEnabledBox" Content="短唤醒安静时段" Margin="0,14,0,6"/>
+    <WrapPanel Margin="0,0,0,5">
+     <TextBox x:Name="WakeQuietStartBox" Width="76" MaxLength="5" Padding="7,5" ToolTip="开始时间，例如 22:00" IsEnabled="{Binding IsChecked, ElementName=WakeQuietEnabledBox}"/>
+     <TextBlock Text=" 至 " VerticalAlignment="Center"/>
+     <TextBox x:Name="WakeQuietEndBox" Width="76" MaxLength="5" Padding="7,5" ToolTip="结束时间，例如 08:00" IsEnabled="{Binding IsChecked, ElementName=WakeQuietEnabledBox}"/>
+     <TextBlock Text="（HH:mm，可跨午夜）" VerticalAlignment="Center" Margin="8,0,0,0" FontSize="12"/>
+    </WrapPanel>
+    <WrapPanel><TextBlock x:Name="WakeQuietZoneText" VerticalAlignment="Center" TextWrapping="Wrap" FontSize="12"/><Button Content="使用当前系统时区" Click="UseCurrentWakeTimeZoneClicked" Margin="8,0,0,0" IsEnabled="{Binding IsChecked, ElementName=WakeQuietEnabledBox}"/></WrapPanel>
+    <TextBlock x:Name="WakeQuietValidationText" TextWrapping="Wrap" FontSize="12" Margin="0,5,0,0"/>
+    <TextBlock Text="仅限制 pushplus 短唤醒，不改变其他通知或任务。关闭此选项会一起清除时间和时区。短唤醒最多每1小时1次、滚动24小时3次；受渠道额度限制。" Style="{StaticResource MutedText}" FontSize="12" Margin="0,6,0,0"/>
+    <WrapPanel Margin="0,10,0,5"><Button Content="打开 pushplus" Click="OpenPushPlusClicked" Margin="0,0,8,0"/><Button Content="发送测试通知" Click="TestPushClicked"/></WrapPanel>
+    <TextBlock x:Name="PushStateText" TextWrapping="Wrap" FontSize="12" Margin="0,6,0,0"/>
+    <Separator Margin="0,18"/>
+    <TextBlock Text="发送内容" Style="{StaticResource SectionTitle}"/>
+    <WrapPanel Margin="0,8,0,3"><CheckBox x:Name="WeChatCompletedBox" Content="本轮结束" Margin="0,0,20,8"/><CheckBox x:Name="WeChatFailedBox" Content="失败" Margin="0,0,20,8"/><CheckBox x:Name="WeChatWaitingBox" Content="等待输入" Margin="0,0,0,8"/></WrapPanel>
+    <CheckBox x:Name="WeChatReportsBox" Content="完成时发送摘要，并允许查询本轮最终回复" Margin="0,5"/>
+    <TextBlock Text="发送“报告”读取最终回复；长文按提示逐页查看。报告可能含文件路径等工作内容，仅回复绑定用户。" Style="{StaticResource MutedText}" FontSize="12" Margin="0,3,0,8"/>
+    <CheckBox x:Name="WeChatSummaryBox" Content="其他通知与查看指令也附带简短公开进展" Margin="0,5"/>
+    <TextBlock Text="最终回复可主动摘要或按查询读取。凭据由当前 Windows 用户加密保存；首次采集不补发以前已结束任务的默认通知。已登记提醒按各自错过策略恢复，未知发送不重发。设置在保存后生效。" Style="{StaticResource MutedText}" FontSize="12" Margin="0,8,0,0"/>
+   </StackPanel></ScrollViewer></TabItem>
+   <TabItem x:Name="ChatGptTab" Header="AI 助手"><ScrollViewer VerticalScrollBarVisibility="Auto" Padding="2,20,12,0"><StackPanel>
+    <TextBlock Text="用 ChatGPT 回答微信问题" Style="{StaticResource SectionTitle}"/>
+    <TextBlock Text="登录 ChatGPT 并授权使用订阅额度后，可以在微信提问，也可以开启任务完成后的自动摘要，按你的人设自然汇报结果和还需处理的问题。" Style="{StaticResource MutedText}" FontSize="13" Margin="0,10,0,18"/>
+    <Button Content="配置 ChatGPT…" Click="ChatGptClicked" HorizontalAlignment="Left"/>
+    <TextBlock Text="登录、模型和 AI 选项在配置窗口中立即生效。微信的“状态”“报告”等原始查询继续直接使用，不消耗模型额度。" Style="{StaticResource MutedText}" FontSize="12" Margin="0,15,0,0"/>
+    <Separator Margin="0,22,0,16"/>
+    <TextBlock Text="连续补充" Style="{StaticResource SectionTitle}"/>
+    <WrapPanel Margin="0,12,0,8">
+     <TextBlock Text="普通问题开始处理前等待" VerticalAlignment="Center" Margin="0,0,10,0"/>
+     <TextBox x:Name="InputMergeWindowBox" Width="78" MaxLength="4" Padding="8,5" ToolTip="0–3000 毫秒；0 表示不等待、不合并"/>
+     <TextBlock Text="毫秒（1000 毫秒 = 1 秒）" VerticalAlignment="Center" Margin="8,0,0,0"/>
+    </WrapPanel>
+    <TextBlock Text="默认等 1 秒，便于把紧接着发来的明确补充一起理解；0 表示不等待、不合并。每条原话仍会保留，不同话题分别处理。状态查询与明确停止请求不等待。保存后，下一次开始处理普通问题时使用新值，已经开始的等待不延长。" Style="{StaticResource MutedText}" FontSize="12"/>
+    <TextBlock x:Name="InputMergeValidationText" TextWrapping="Wrap" FontSize="12" Margin="0,6,0,0"/>
+    <Separator Margin="0,22,0,16"/>
+    <TextBlock Text="任务并发" Style="{StaticResource SectionTitle}"/>
+    <CheckBox x:Name="ConcurrencyEnabledBox" Content="限制助手同时执行的任务数" Margin="0,12,0,8"/>
+    <WrapPanel><TextBox x:Name="ConcurrencyLimitBox" Width="70" MaxLength="2" Padding="8,5" IsEnabled="{Binding IsChecked, ElementName=ConcurrencyEnabledBox}"/><TextBlock Text="个（1–32）" VerticalAlignment="Center" Margin="8,0,0,0"/></WrapPanel>
+    <TextBlock Text="默认不限；所有主机共用上限。等待审批和结果待核对的任务仍占额度；结果待核对不代表仍在运行。调低上限不会中断现有任务，查询和停止任务不受限制。" Style="{StaticResource MutedText}" FontSize="12" Margin="0,10,0,0"/>
+    <TextBlock Text="额度已满时，已排队的原任务指令继续等待；自建任务的新请求尚不自动排队，请稍后再次明确要求。保存后生效。" Style="{StaticResource MutedText}" FontSize="12" Margin="0,8,0,0"/>
+   </StackPanel></ScrollViewer></TabItem>
+   <TabItem x:Name="SourcesTab" Header="数据源"><ScrollViewer VerticalScrollBarVisibility="Auto" Padding="2,20,12,0"><StackPanel>
+    <TextBlock Text="助手实际保存位置" Margin="0,0,0,7"/>
+    <TextBox x:Name="ActualDataDirectoryBox" IsReadOnly="True" TextWrapping="Wrap" Padding="10,8"/>
+    <TextBlock Text="配置、对话和记忆保存在这里。此处用于核对当前实例，不会移动已有数据。" Style="{StaticResource MutedText}" FontSize="12" Margin="0,6,0,14"/>
+    <TextBlock Text="媒体试验（保存后下次启动生效）" FontWeight="SemiBold" Margin="0,18,0,8"/>
+    <CheckBox x:Name="MediaAttachmentsBox" Content="读取单个附件：文字、Word及PDF文字层" Margin="0,4"/>
+    <CheckBox x:Name="MediaImagesBox" Content="图片分析：PNG/JPEG，需要附件读取和可用模型" Margin="0,4"/>
+    <CheckBox x:Name="MediaFilesBox" Content="准备文件快照，并通过明确微信指令发送" Margin="0,4"/>
+    <CheckBox x:Name="MediaTypingBox" Content="模型回答时尝试显示输入状态" Margin="0,4"/>
+    <TextBlock Text="默认关闭，当前账号手机验收尚未完成。保存不会重启助手或改变当前收发；下次启动才应用。开发启动环境中的0/1开关可覆盖这些选项。" Style="{StaticResource MutedText}" FontSize="12" Margin="0,6,0,12"/>
+    <TextBlock Text="历史归档" Style="{StaticResource SectionTitle}"/>
+    <CheckBox x:Name="HistoryArchiveBox" Content="下次启动时为尚未归档的账本启用历史归档" Margin="0,10,0,8"/>
+    <TextBlock x:Name="HistoryArchiveHelp" Text="保存只更新此选项，不重启助手。下次启动后，第一次成功保存记录时转为归档格式，保留历史原文和来源。已使用归档的账本始终需要原归档目录，取消勾选不能转回旧格式。当前是否已归档可在诊断页查看。" Style="{StaticResource MutedText}" FontSize="12" Margin="0,0,0,8"/>
+    <TextBlock Text="启用前请退出助手并备份整个保存目录。启用后，旧版本可能无法读取；回退需恢复启用前的完整备份，之后新增的记录不会自动合并。备份和恢复必须一起保留 conversations.state 与 history-archive 目录，不要单独移动或删除归档卷。此选项不会代你备份或恢复数据。" Style="{StaticResource MutedText}" FontSize="12" Margin="0,0,0,18"/>
+    <CheckBox x:Name="LocalBox" Content="监控本机" Margin="0,8,0,16"/>
+    <TextBlock Text="本机 Python 路径" Margin="0,0,0,7"/><TextBox x:Name="PythonBox" Padding="10,8"/>
+    <TextBlock Text="Codex 数据目录" Margin="0,18,0,7"/><TextBox x:Name="HomeBox" Padding="10,8"/>
+    <TextBlock Text="远程 SSH 别名" Margin="0,18,0,7"/><TextBox x:Name="HostsBox" Padding="10,8"/>
+    <TextBlock Text="多个别名以逗号分隔；留空可关闭远程监控。" Style="{StaticResource MutedText}" FontSize="12" Margin="0,8,0,20"/>
+    <Grid ColumnDefinitions="110,*,45" Margin="0,10,0,20"><TextBlock Text="刷新间隔（秒）" VerticalAlignment="Center"/><Slider x:Name="RefreshSlider" Grid.Column="1" Minimum="5" Maximum="60" TickFrequency="5" IsSnapToTickEnabled="True"/><TextBlock Grid.Column="2" Text="{Binding ElementName=RefreshSlider,Path=Value,StringFormat=F0}" HorizontalAlignment="Right"/></Grid>
+    <TextBlock Text="远程使用已有 SSH 密钥与 python3，不安装额外远程服务。" Style="{StaticResource MutedText}" FontSize="12"/>
+   </StackPanel></ScrollViewer></TabItem>
+  </TabControl>
+ </DockPanel>
+</Window>

@@ -1,0 +1,257 @@
+<Window x:Class="CodexDashboard.AssistantWorkWindow"
+ xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+ xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+ Title="工作与记录" Width="1000" Height="690" MinWidth="720" MinHeight="520"
+ Style="{StaticResource ShellWindow}" ThemeMode="Light" WindowStartupLocation="CenterOwner">
+ <Window.Resources>
+  <Style x:Key="WrappedRecordText" TargetType="TextBlock">
+   <Setter Property="TextWrapping" Value="Wrap"/>
+   <Setter Property="Margin" Value="2,3"/>
+  </Style>
+  <Style x:Key="RecordIdText" TargetType="TextBlock" BasedOn="{StaticResource WrappedRecordText}">
+   <Setter Property="FontFamily" Value="Consolas"/>
+   <Setter Property="FontSize" Value="12"/>
+  </Style>
+ </Window.Resources>
+ <DockPanel Margin="26,18">
+  <StackPanel DockPanel.Dock="Top">
+   <DockPanel>
+    <Button x:Name="RefreshButton" DockPanel.Dock="Right" Content="刷新记录" Click="RefreshClicked" VerticalAlignment="Top"/>
+    <TextBlock Text="工作与记录" FontSize="25" FontWeight="SemiBold" Margin="0,0,20,6"/>
+   </DockPanel>
+   <TextBlock x:Name="ReadAtText" Style="{StaticResource MutedText}" Margin="0,0,0,6"/>
+   <TextBlock x:Name="ContextText" TextWrapping="Wrap" Margin="0,0,0,6"/>
+  </StackPanel>
+  <TextBlock x:Name="DiagnosticText" DockPanel.Dock="Bottom" Style="{StaticResource MutedText}" FontSize="12" Margin="0,12,0,0"/>
+  <Expander x:Name="ConversationDiagnostics" DockPanel.Dock="Bottom" Header="记录说明与运行状态" Visibility="Collapsed"
+    IsExpanded="False" Margin="0,8,0,0" FontSize="12">
+   <ScrollViewer x:Name="ConversationDiagnosticScroll" MaxHeight="40" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+    <TextBlock x:Name="ConversationDiagnosticText" Text="{Binding Text, ElementName=DiagnosticText}" TextWrapping="Wrap"
+      Style="{StaticResource MutedText}" FontSize="12" Margin="0,6,0,0"/>
+   </ScrollViewer>
+  </Expander>
+  <TabControl x:Name="WorkTabs" SelectionChanged="WorkTabChanged">
+   <TabItem Header="提醒与订阅">
+    <DockPanel Margin="0,12,0,0">
+     <StackPanel DockPanel.Dock="Top">
+      <DockPanel>
+       <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+        <Button x:Name="SearchCommitmentsButton" Content="查找" Click="SearchCommitmentsClicked" Margin="6,0,6,0"/>
+        <Button x:Name="PreviousCommitmentsButton" Content="上一页" Click="PreviousCommitmentsClicked" Margin="0,0,6,0"/>
+        <Button x:Name="NextCommitmentsButton" Content="下一页" Click="NextCommitmentsClicked"/>
+       </StackPanel>
+       <TextBlock DockPanel.Dock="Left" Text="内容或编号" VerticalAlignment="Center" Margin="0,0,8,0"/>
+       <TextBox x:Name="CommitmentSearchBox" VerticalContentAlignment="Center" KeyDown="CommitmentSearchKeyDown"
+        ToolTip="搜索已保存的完整内容、事项编号、主机或任务编号；留空查看全部"/>
+      </DockPanel>
+      <TextBlock x:Name="CommitmentCountText" TextWrapping="Wrap" Style="{StaticResource MutedText}" FontSize="12" Margin="0,6,0,6"/>
+     </StackPanel>
+    <Grid>
+     <Grid.RowDefinitions>
+      <RowDefinition Height="0.9*"/>
+      <RowDefinition Height="6"/>
+      <RowDefinition Height="1.3*"/>
+     </Grid.RowDefinitions>
+    <DataGrid x:Name="CommitmentsGrid" IsReadOnly="True" AutoGenerateColumns="False" CanUserAddRows="False"
+      HeadersVisibility="Column" GridLinesVisibility="Horizontal" SelectionMode="Single" SelectionChanged="CommitmentSelected">
+     <DataGrid.Columns>
+      <DataGridTextColumn Header="安排" Binding="{Binding Kind}" Width="100"/>
+      <DataGridTextColumn Header="当前记录" Binding="{Binding State}" Width="170"/>
+      <DataGridTextColumn Header="内容与触发时间" Binding="{Binding Target}" Width="*" ElementStyle="{StaticResource WrappedRecordText}"/>
+      <DataGridTextColumn Header="完整编号" Binding="{Binding Id}" Width="230" ElementStyle="{StaticResource RecordIdText}"/>
+     </DataGrid.Columns>
+    </DataGrid>
+     <GridSplitter Grid.Row="1" Height="6" HorizontalAlignment="Stretch" ResizeDirection="Rows" ResizeBehavior="PreviousAndNext"/>
+     <DockPanel Grid.Row="2">
+      <TextBlock Text="事项详情" DockPanel.Dock="Top" FontSize="15" FontWeight="SemiBold" Margin="0,4,0,6"/>
+      <ScrollViewer x:Name="CommitmentDetailScroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+       <StackPanel>
+        <TextBox x:Name="CommitmentDetailBox" IsReadOnly="True" TextWrapping="Wrap" AcceptsReturn="True"
+         VerticalScrollBarVisibility="Disabled" HorizontalScrollBarVisibility="Disabled" Padding="10"
+         Text="选择一项安排，查看完整内容、触发规则与实际发送记录。"/>
+        <Expander x:Name="CommitmentTechnicalExpander" Header="记录编号与版本" IsExpanded="False" Margin="0,6,0,0">
+         <TextBox x:Name="CommitmentTechnicalBox" IsReadOnly="True" TextWrapping="Wrap" AcceptsReturn="True"
+          VerticalScrollBarVisibility="Disabled" HorizontalScrollBarVisibility="Disabled" Padding="8"/>
+        </Expander>
+       </StackPanel>
+      </ScrollViewer>
+     </DockPanel>
+    </Grid>
+    </DockPanel>
+   </TabItem>
+   <TabItem x:Name="DependenciesTab" Header="依赖工作">
+    <DockPanel Margin="0,10,0,0">
+     <StackPanel DockPanel.Dock="Top">
+      <DockPanel>
+       <TextBlock DockPanel.Dock="Left" Text="内容或编号" VerticalAlignment="Center" Margin="0,0,8,0"/>
+       <TextBox x:Name="DependencySearchBox" TextChanged="DependencySearchChanged" VerticalContentAlignment="Center"
+        ToolTip="搜索完整指令、前置、任务编号和原始请求；留空查看全部"/>
+      </DockPanel>
+      <TextBlock x:Name="DependencyCountText" Style="{StaticResource MutedText}" FontSize="12" Margin="0,5,0,5"/>
+     </StackPanel>
+     <Grid>
+      <Grid.RowDefinitions>
+       <RowDefinition Height="0.8*"/>
+       <RowDefinition Height="6"/>
+       <RowDefinition Height="1.4*"/>
+      </Grid.RowDefinitions>
+      <DataGrid x:Name="DependenciesGrid" IsReadOnly="True" AutoGenerateColumns="False" CanUserAddRows="False"
+       HeadersVisibility="Column" GridLinesVisibility="Horizontal" SelectionMode="Single" SelectionChanged="DependencySelected">
+       <DataGrid.Columns>
+        <DataGridTextColumn Header="当前记录" Binding="{Binding State}" Width="160"/>
+        <DataGridTextColumn Header="后续完整指令" Binding="{Binding Target}" Width="*" ElementStyle="{StaticResource WrappedRecordText}"/>
+        <DataGridTextColumn Header="更新" Binding="{Binding Updated}" Width="115"/>
+       </DataGrid.Columns>
+      </DataGrid>
+      <GridSplitter Grid.Row="1" Height="6" HorizontalAlignment="Stretch" ResizeDirection="Rows" ResizeBehavior="PreviousAndNext"/>
+      <ScrollViewer x:Name="DependencyDetailScroll" Grid.Row="2" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+       <StackPanel>
+        <TextBox x:Name="DependencyDetailBox" IsReadOnly="True" TextWrapping="Wrap" AcceptsReturn="True" Padding="10"
+         VerticalScrollBarVisibility="Disabled" HorizontalScrollBarVisibility="Disabled"
+         Text="选择一项依赖工作，查看前置条件、完整指令、截止时间及实际派发记录。"/>
+        <Expander x:Name="DependencyCommandsExpander" Header="管理指令（在微信发送）" IsExpanded="False" Margin="0,6,0,0">
+         <StackPanel>
+          <TextBlock Text="选择并复制需要的指令；替换示例文字后，在当前微信对话发送。此处不会执行操作。"
+           TextWrapping="Wrap" Style="{StaticResource MutedText}" FontSize="12" Margin="0,4,0,4"/>
+          <TextBox x:Name="DependencyCommandsBox" IsReadOnly="True" TextWrapping="Wrap" AcceptsReturn="True" Padding="8"
+           VerticalScrollBarVisibility="Disabled" HorizontalScrollBarVisibility="Disabled"/>
+         </StackPanel>
+        </Expander>
+       </StackPanel>
+      </ScrollViewer>
+     </Grid>
+    </DockPanel>
+   </TabItem>
+   <TabItem Header="待处理">
+    <DataGrid x:Name="WorkGrid" Margin="0,12,0,0" IsReadOnly="True" AutoGenerateColumns="False" CanUserAddRows="False"
+      HeadersVisibility="Column" GridLinesVisibility="Horizontal" SelectionMode="Single">
+     <DataGrid.Columns>
+      <DataGridTextColumn Header="事项" Binding="{Binding Kind}" Width="120"/>
+      <DataGridTextColumn Header="当前记录" Binding="{Binding State}" Width="190"/>
+      <DataGridTextColumn Header="目标或内容" Binding="{Binding Target}" Width="*"/>
+      <DataGridTextColumn Header="更新" Binding="{Binding Updated}" Width="115"/>
+     </DataGrid.Columns>
+    </DataGrid>
+   </TabItem>
+   <TabItem x:Name="OperationsTab" Header="操作记录">
+    <DockPanel>
+     <StackPanel DockPanel.Dock="Top" Margin="0,12,0,0">
+      <DockPanel>
+       <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+        <Button Content="查找" Click="SearchOperationsClicked" Margin="6,0"/>
+        <Button x:Name="PreviousOperationsButton" Content="上一页" Click="PreviousOperationsClicked" IsEnabled="False" Margin="0,0,6,0"/>
+        <Button x:Name="NextOperationsButton" Content="下一页" Click="NextOperationsClicked" IsEnabled="False"/>
+       </StackPanel>
+       <TextBlock DockPanel.Dock="Left" Text="内容或编号" VerticalAlignment="Center" Margin="0,0,8,0"/>
+       <TextBox x:Name="OperationSearchBox" VerticalContentAlignment="Center" KeyDown="OperationSearchKeyDown" ToolTip="搜索完整操作详情、编号、状态或目标；留空查看全部"/>
+      </DockPanel>
+      <TextBlock x:Name="OperationCountText" TextWrapping="Wrap" Style="{StaticResource MutedText}" FontSize="12" Margin="0,6,0,0"/>
+     </StackPanel>
+    <Grid Margin="0,12,0,0">
+     <Grid.RowDefinitions>
+      <RowDefinition Height="0.9*"/>
+      <RowDefinition Height="6"/>
+      <RowDefinition Height="1.3*"/>
+     </Grid.RowDefinitions>
+     <DataGrid x:Name="OperationsGrid" IsReadOnly="True" AutoGenerateColumns="False" CanUserAddRows="False"
+       HeadersVisibility="Column" GridLinesVisibility="Horizontal" SelectionMode="Single" SelectionChanged="OperationSelected">
+      <DataGrid.Columns>
+       <DataGridTextColumn Header="操作" Binding="{Binding Kind}" Width="115"/>
+       <DataGridTextColumn Header="结果" Binding="{Binding State}" Width="210"/>
+       <DataGridTextColumn Header="目标" Binding="{Binding Target}" Width="*" ElementStyle="{StaticResource WrappedRecordText}"/>
+      </DataGrid.Columns>
+     </DataGrid>
+     <GridSplitter Grid.Row="1" Height="6" HorizontalAlignment="Stretch" ResizeDirection="Rows" ResizeBehavior="PreviousAndNext"/>
+     <DockPanel Grid.Row="2">
+      <TextBlock Text="操作详情" DockPanel.Dock="Top" FontSize="15" FontWeight="SemiBold" Margin="0,4,0,6"/>
+      <ScrollViewer x:Name="OperationDetailScroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+       <StackPanel>
+        <TextBox x:Name="OperationDetailBox" IsReadOnly="True" TextWrapping="Wrap" AcceptsReturn="True"
+         VerticalScrollBarVisibility="Disabled" HorizontalScrollBarVisibility="Disabled" Padding="10"
+         Text="选择一项操作，查看原始请求、实际处理结果与回执说明。"/>
+        <Expander x:Name="OperationTechnicalExpander" Header="记录编号" IsExpanded="False" Margin="0,6,0,0">
+         <TextBox x:Name="OperationTechnicalBox" IsReadOnly="True" TextWrapping="Wrap" AcceptsReturn="True"
+          VerticalScrollBarVisibility="Disabled" HorizontalScrollBarVisibility="Disabled" Padding="8"/>
+        </Expander>
+       </StackPanel>
+      </ScrollViewer>
+     </DockPanel>
+    </Grid>
+    </DockPanel>
+   </TabItem>
+   <TabItem x:Name="MessagesTab" Header="消息发送">    <DockPanel Margin="0,12,0,0">
+     <StackPanel DockPanel.Dock="Top">
+      <DockPanel>
+       <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+        <Button Content="查找" Click="SearchMessagesClicked" Margin="6,0"/>
+        <Button x:Name="PreviousMessagesButton" Content="上一页" Click="PreviousMessagesClicked" IsEnabled="False" Margin="0,0,6,0"/>
+        <Button x:Name="NextMessagesButton" Content="下一页" Click="NextMessagesClicked" IsEnabled="False"/>
+       </StackPanel>
+       <TextBlock DockPanel.Dock="Left" Text="正文或编号" VerticalAlignment="Center" Margin="0,0,8,0"/>
+       <TextBox x:Name="MessageSearchBox" VerticalContentAlignment="Center" KeyDown="MessageSearchKeyDown" ToolTip="搜索完整已保存正文、编号、类型或发送状态；留空查看全部"/>
+      </DockPanel>
+      <TextBlock x:Name="MessageCountText" TextWrapping="Wrap" Style="{StaticResource MutedText}" FontSize="12" Margin="0,6"/>
+     </StackPanel>
+     <Grid>
+      <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="6"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+    <DataGrid x:Name="MessagesGrid" SelectionChanged="MessageSelected" Margin="0" IsReadOnly="True" AutoGenerateColumns="False" CanUserAddRows="False"
+      HeadersVisibility="Column" GridLinesVisibility="Horizontal" SelectionMode="Single">
+     <DataGrid.Columns>
+      <DataGridTextColumn Header="类型" Binding="{Binding Kind}" Width="100"/>
+      <DataGridTextColumn Header="发送记录" Binding="{Binding State}" Width="245"/>
+      <DataGridTextColumn Header="内容摘要" Binding="{Binding Target}" Width="*"/>
+      <DataGridTextColumn Header="更新" Binding="{Binding Updated}" Width="115"/>
+     </DataGrid.Columns>
+    </DataGrid>
+      <GridSplitter Grid.Row="1" Height="6" HorizontalAlignment="Stretch" ResizeDirection="Rows" ResizeBehavior="PreviousAndNext"/>
+      <TextBox x:Name="MessageDetailBox" Grid.Row="2" IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" Padding="10"/>
+     </Grid>
+    </DockPanel>
+   </TabItem>
+   <TabItem Header="可用能力">
+    <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="12,18">
+     <TextBlock x:Name="CapabilitiesText" TextWrapping="Wrap" FontSize="14"/>
+    </ScrollViewer>
+   </TabItem>
+   <TabItem x:Name="ConversationTab" Header="对话记录">
+    <Grid Margin="0,6,0,0">
+     <Grid.RowDefinitions>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="*"/>
+      <RowDefinition Height="6"/>
+      <RowDefinition Height="*"/>
+     </Grid.RowDefinitions>
+     <StackPanel>
+      <DockPanel Margin="0,0,0,6">
+       <Button x:Name="SearchConversationButton" DockPanel.Dock="Right" Content="搜索全部历史" Click="SearchConversationClicked" IsEnabled="False" Margin="8,0,0,0"/>
+       <TextBox x:Name="ConversationSearchBox" IsEnabled="False" ToolTip="搜索完整正文、记录编号、任务关联、来源或状态；清空后搜索可返回全部历史。"/>
+      </DockPanel>
+      <DockPanel Margin="0,0,0,4">
+       <WrapPanel DockPanel.Dock="Right" Margin="8,0,0,0">
+        <Button x:Name="OlderConversationButton" Content="更早记录" Click="OlderConversationClicked" IsEnabled="False" Margin="0,0,8,0"/>
+        <Button x:Name="LatestConversationButton" Content="返回最近" Click="LatestConversationClicked" IsEnabled="False"/>
+        <Button x:Name="ExportConversationButton" Content="导出全部（含正文）…" Click="ExportConversationClicked" IsEnabled="False" Margin="8,0,0,0"/>
+       </WrapPanel>
+       <TextBlock x:Name="ConversationCountText" TextWrapping="Wrap" Style="{StaticResource MutedText}" VerticalAlignment="Center"/>
+      </DockPanel>
+      <TextBlock x:Name="ConversationReadAtText" TextWrapping="Wrap" Style="{StaticResource MutedText}" FontSize="12" Margin="0,0,0,6"/>
+     </StackPanel>
+     <DataGrid x:Name="ConversationGrid" Grid.Row="1" IsReadOnly="True" AutoGenerateColumns="False"
+       CanUserAddRows="False" HeadersVisibility="Column" GridLinesVisibility="Horizontal" SelectionMode="Single"
+       SelectionChanged="ConversationSelected">
+      <DataGrid.Columns>
+       <DataGridTextColumn Header="时间" Binding="{Binding Time}" Width="115"/>
+       <DataGridTextColumn Header="来源" Binding="{Binding Speaker}" Width="90"/>
+       <DataGridTextColumn Header="处理或发送记录" Binding="{Binding State}" Width="220" ElementStyle="{StaticResource WrappedRecordText}"/>
+       <DataGridTextColumn Header="正文预览" Binding="{Binding Preview}" Width="*" ElementStyle="{StaticResource WrappedRecordText}"/>
+      </DataGrid.Columns>
+     </DataGrid>
+     <GridSplitter Grid.Row="2" Height="6" HorizontalAlignment="Stretch" ResizeDirection="Rows" ResizeBehavior="PreviousAndNext"/>
+     <TextBox x:Name="ConversationDetailBox" Grid.Row="3" IsReadOnly="True" TextWrapping="Wrap"
+       AcceptsReturn="True" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+       Padding="10" Text="选择一条记录，查看保存的完整正文。"/>
+    </Grid>
+   </TabItem>
+  </TabControl>
+ </DockPanel>
+</Window>

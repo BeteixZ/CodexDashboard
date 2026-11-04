@@ -128,6 +128,31 @@ class CollectorTests(unittest.TestCase):
         self.state.execute("INSERT INTO thread_spawn_edges VALUES('child')"); self.state.commit()
         self.assertEqual([x['id'] for x in collector.collect(self.home, now=1100)['tasks']], ['one'])
 
+    def test_only_reports_truncation_when_another_main_task_is_omitted(self):
+        self.thread('child', 'subagent'); self.thread('archived', archived=1)
+        result = collector.collect(self.home, limit=1, now=1100)
+        self.assertEqual([task['id'] for task in result['tasks']], ['one'])
+        self.assertFalse(result['truncated'])
+        self.thread('another')
+        result = collector.collect(self.home, limit=1, now=1100)
+        self.assertEqual(len(result['tasks']), 1)
+        self.assertTrue(result['truncated'])
+
+    def test_old_history_schema_uses_rollout_instead_of_failing_the_host(self):
+        self.turn(id='legacy')
+        self.events([{'type': 'event_msg', 'timestamp': 1050, 'payload': {
+            'type': 'task_complete', 'turn_id': 'legacy', 'last_agent_message': '已完成验证'}}])
+        for table, column in [('thread_turns', 'started_at'), ('thread_items', 'rollout_ordinal')]:
+            with self.subTest(table=table):
+                self.history.execute(f'ALTER TABLE {table} RENAME COLUMN {column} TO old_{column}')
+                try:
+                    result = collector.collect(self.home, now=1100)
+                    self.assertEqual(result['warnings'], ['历史索引格式不可用，使用会话记录'])
+                    self.assertEqual(result['tasks'][0]['finalReport'], '已完成验证')
+                    self.assertEqual(result['tasks'][0]['status'], 'completed')
+                finally:
+                    self.history.execute(f'ALTER TABLE {table} RENAME COLUMN old_{column} TO {column}')
+
     def test_excludes_reasoning_credentials_and_command_output(self):
         self.turn()
         self.item('reasoning', {'type': 'reasoning', 'content': ['PRIVATE_REASONING']})

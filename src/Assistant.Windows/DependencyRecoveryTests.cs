@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -145,6 +146,76 @@ internal static class DependencyRecoveryTests
         await f.Runtime.AdvanceDependenciesAsync(identity);
         Check("unchanged_final_state_keeps_recovery_deduplication", (await f.ReadAsync()).Events.Count(e => e.DependentWorkNotice?.WorkItemId == quiet.Id
             && e.DependentWorkNotice.Stage == DependentWorkStage.Completed) == 1 && f.Sent.Count(s => s == quietCompleted.Body) == 1);
+
+        await CheckMissedCompletionBeyondFirstBatch(Path.Combine(directory, "result-batch"), Check);
+    }
+
+    private static async Task CheckMissedCompletionBeyondFirstBatch(string directory, Action<string, bool> check)
+    {
+        var profiles = Enumerable.Range(0, 9).Select(i =>
+        {
+            string id = "batch-" + i;
+            var profile = OwnedHostRuntimeTests.Profile(Path.Combine(directory, id), true);
+            Directory.CreateDirectory(profile.Creation.Cwd);
+            var connection = profile.Configuration.Connection with { Endpoint = new("local", id) };
+            var configuration = profile.Configuration with { Connection = connection };
+            return profile with { Id = id, Configuration = configuration with { Verification = configuration.Verification! with
+                { Connection = connection, ConfigurationDigest = OwnedVerification.ConfigurationDigest(configuration) } } };
+        }).ToArray();
+        var connections = new ConcurrentDictionary<string, OwnedHostRuntimeTests.FakeRpc>();
+        var options = new OwnedHostOptions(Path.Combine(directory, "owned"), profiles, (p, _) =>
+        {
+            var rpc = new OwnedHostRuntimeTests.FakeRpc(p.Configuration, () => Task.FromResult(true));
+            connections[p.Id] = rpc;
+            return Task.FromResult<IJsonRpcConnection>(rpc);
+        });
+        await using var f = await DurableRuntimeTests.Fixture.CreateAsync(Path.Combine(directory, "fixture"), ownedOptions: options);
+        f.Settings.ChatGpt.TaskControlEnabled = true;
+        var runtime = f.Runtime.OwnedRuntime!;
+        var identity = f.Runtime.Identity!;
+        async Task<DependentWorkSnapshot> Saved() => await f.Ledger.GetDependentWorkAsync(identity);
+
+        // Leave eight accepted arrangements running, and drop the ninth completion event.
+        for (int i = 0; i < profiles.Length; i++)
+        {
+            var profile = profiles[i];
+            f.Settings.ChatGpt.Enabled = true;
+            await OwnedHostRuntimeTests.SendToolAsync(f, "create-" + i, "新建 " + profile.Id,
+                _ => OwnedHostRuntimeTests.Call("create_task", new { configurationId = profile.Id }));
+            var task = runtime.Tasks().SingleOrDefault(t => t.ConfigurationId == profile.Id)
+                ?? throw new InvalidOperationException($"Could not create fixture {profile.Id}: {f.Sent.LastOrDefault()}");
+            var rpc = connections[profile.Id];
+            string thread = task.Handle.Identity.ThreadId;
+            string baselineId = Guid.NewGuid().ToString("D");
+            var baselineTurn = OwnedHostRuntimeTests.FakeRpc.Turn(baselineId, "inProgress");
+            rpc.SetThread(thread, profile.Creation.Cwd, baselineTurn);
+            rpc.Emit("turn/started", new { threadId = thread, turn = baselineTurn });
+            await Wait(() => Task.FromResult(runtime.Tasks().Single(t => t.Handle.Identity.ThreadId == thread).Snapshot.State == OwnedTaskState.Running));
+            f.Settings.ChatGpt.Enabled = false;
+            string schedule = "schedule-" + i;
+            await f.InputAsync(schedule, $"等 {thread} 本轮完成后，向 {thread} 发送：执行合成安排 {i}");
+            await OwnedHostRuntimeTests.WaitReplyAsync(f, schedule);
+            baselineTurn = OwnedHostRuntimeTests.FakeRpc.Turn(baselineId, "completed");
+            rpc.SetThread(thread, profile.Creation.Cwd, baselineTurn);
+            rpc.Emit("turn/completed", new { threadId = thread, turn = baselineTurn });
+            await Wait(() => Task.FromResult(runtime.Tasks().Single(t => t.Handle.Identity.ThreadId == thread).Snapshot.State == OwnedTaskState.Completed));
+            await f.Runtime.AdvanceDependenciesAsync(identity);
+            var saved = await Saved();
+            if (saved.WorkItems.Count(w => w.Stage == DependentWorkStage.Running) != i + 1)
+                throw new InvalidOperationException($"Could not seed arrangement {i}: {string.Join(", ", saved.WorkItems.Select(w => $"{w.Stage}/{w.Reason}"))}");
+        }
+
+        var pending = (await Saved()).WorkItems;
+        var last = pending[^1].ResultTask!;
+        connections[profiles[^1].Id].SetThread(last.ThreadId, profiles[^1].Creation.Cwd,
+            OwnedHostRuntimeTests.FakeRpc.Turn(last.TurnId!, "completed"));
+        await f.Runtime.AdvanceDependenciesAsync(identity);
+        await f.Runtime.AdvanceDependenciesAsync(identity);
+        var recovered = (await Saved()).WorkItems;
+        check("missed_result_event_is_recovered_beyond_the_first_eight_running_arrangements",
+            recovered[^1].Completion?.Task == last && recovered[^1].Stage == DependentWorkStage.Completed
+            && recovered.Take(8).All(w => w.Stage == DependentWorkStage.Running)
+            && connections.Values.All(rpc => rpc.GuardedTexts.Count == 1));
     }
     private static async Task Wait(Func<Task<bool>> condition)
     {

@@ -322,25 +322,40 @@ internal sealed class DurableMessageCoordinator : IAsyncDisposable
             var current = CurrentInput(snapshot);
             if (current is null || current.Revision != revision || !StillCurrent(active, revision)) return;
             var groupedInputs = new List<InboxMessage> { current };
-            // Follow adjacent additions, stopping at the first independent or
+            var replacedInputs = new HashSet<Guid>();
+            // Follow adjacent additions and corrections, stopping at the first independent or
             // already claimed input. A, B, "add to B" must not absorb A merely
             // because the latest message begins with an addition marker.
             foreach (var earlier in snapshot.Inbox.Where(x => x.Revision < revision).OrderByDescending(x => x.Revision))
             {
-                var replacesPending = groupedInputs.Count == 1
-                    && options.ReplacesPendingReply?.Invoke(earlier, current) == true
-                    && snapshot.Generations.Any(g => g.InboxIds.Contains(earlier.Id) && g.Stage == GenerationStage.Superseded)
-                    && !snapshot.Operations.Any(o => o.SourceMessageId == earlier.SourceMessageId)
-                    && !snapshot.Outbox.Any(o => snapshot.Generations.Any(g => g.Id == o.GenerationId && g.InboxIds.Contains(earlier.Id)));
                 if (groupedInputs.Count >= options.MaximumGroupedMessages
                     || !IsResumable(earlier.Stage)
                     || snapshot.InputWork.Any(work => work.SourceMessageId == earlier.SourceMessageId)
                     || earlier.Revision < (snapshot.Context?.StartRevision ?? 0)
-                    || current.ReceivedAt < earlier.ReceivedAt
-                    || (!replacesPending && (current.ReceivedAt - earlier.ReceivedAt > mergeWindow
-                        || !CanGroup(earlier, groupedInputs[^1], mergeWindow)))) break;
+                    || current.ReceivedAt < earlier.ReceivedAt) break;
+
+                var following = groupedInputs[^1];
+                var correctionLink = replacedInputs.Count == 0
+                    ? options.ReplacesPendingReply?.Invoke(earlier, following) == true
+                    : replacedInputs.Contains(earlier.Id);
+                var canCorrect = correctionLink
+                    && !snapshot.Operations.Any(o => o.SourceMessageId == earlier.SourceMessageId)
+                    && !snapshot.Outbox.Any(o => snapshot.Generations.Any(g => g.Id == o.GenerationId && g.InboxIds.Contains(earlier.Id)));
+                var replaced = canCorrect ? snapshot.Generations.LastOrDefault(g => g.InboxIds.Contains(earlier.Id)
+                    && g.Stage == GenerationStage.Superseded) : null;
+                // During the merge wait, a correction can arrive before its predecessor
+                // starts a generation. Keep the adjacent originals together in that case.
+                if (replaced is null && (current.ReceivedAt - earlier.ReceivedAt > mergeWindow
+                    || !CanGroup(earlier, following, mergeWindow, canCorrect))) break;
+
                 groupedInputs.Add(earlier);
-                if (replacesPending) break;
+                if (replaced is not null && replacedInputs.Count == 0)
+                {
+                    // A second correction supersedes the previous generation's entire
+                    // pending input group, not just its last message.
+                    replacedInputs.UnionWith(replaced.InboxIds);
+                }
+                if (replaced is not null && replacedInputs.All(id => groupedInputs.Any(input => input.Id == id))) break;
             }
             var grouped = groupedInputs.OrderBy(x => x.Revision).Select(x => x.SourceMessageId).ToArray();
             if (grouped.Length > 1) await ledger.GroupMessagesAsync(active.Identity, grouped, token).ConfigureAwait(false);
@@ -395,17 +410,24 @@ internal sealed class DurableMessageCoordinator : IAsyncDisposable
             ToolModelFailureKind.Authorization => "模型登录或授权暂时不可用，请在电脑端助手的设置里重新登录。",
             ToolModelFailureKind.UsageLimit => "模型额度已用完，可以在账户用量页查看恢复时间。",
             ToolModelFailureKind.RateLimited => "请求暂时太频繁了，稍等一会儿再聊。",
-            ToolModelFailureKind.InvalidOutput => "这次回复的格式出了问题，没能正常读取。",
+            ToolModelFailureKind.InvalidOutput => "这次回答没生成好。",
             ToolModelFailureKind.Timeout => "这次回复超时了，没能答完。",
             _ => result.State switch
         {
-            ToolLoopState.BudgetExceeded => "这次处理步骤较多，还没整理完。可以把问题拆小一点。",
+            ToolLoopState.BudgetExceeded => "这次还没处理完。",
             ToolLoopState.ModelUnavailable => "这次没能收到可用的模型回复，暂时答不了。",
             _ => "这次没能整理好回复。"
         }
         };
         if (result.Observations.Any(observation => observation.OperationId != null))
             text += "已有工作操作记录，请先发“工作列表”核对结果。";
+        else if (result.State == ToolLoopState.BudgetExceeded)
+            text += result.Observations.Any(observation => observation.ToolName is "search_history" or "read_history_event" or "search_episode_summaries")
+                ? "之前的记录还没查完。可以补充大概时间，或原话里的一个关键词。"
+                : "可以先告诉我最想确认的一个问题。";
+        else if (result.ModelFailure is ToolModelFailureKind.InvalidOutput or ToolModelFailureKind.Timeout
+            || result.State == ToolLoopState.ModelUnavailable && result.ModelFailure is null or ToolModelFailureKind.Unavailable)
+            text += "可以发“重新回答刚才的问题”。";
         return [text];
     }
 
@@ -567,12 +589,12 @@ internal sealed class DurableMessageCoordinator : IAsyncDisposable
         return await pending.WaitAsync(deadline.Token).ConfigureAwait(false);
     }
 
-    private bool CanGroup(InboxMessage earlier, InboxMessage current, TimeSpan window) =>
+    private bool CanGroup(InboxMessage earlier, InboxMessage current, TimeSpan window, bool canCorrect) =>
         window > TimeSpan.Zero && current.ReceivedAt >= earlier.ReceivedAt
         && current.ReceivedAt - earlier.ReceivedAt <= window
         && earlier.ReferencedEventId == current.ReferencedEventId
         && !earlier.HasUnresolvedReference && !current.HasUnresolvedReference
-        && (options.CanGroup?.Invoke(earlier, current) ?? earlier.Task == current.Task);
+        && (canCorrect || (options.CanGroup?.Invoke(earlier, current) ?? earlier.Task == current.Task));
 
     private bool IsSessionCurrent(Session active) => Volatile.Read(ref session) == active
         && !active.Lifetime.IsCancellationRequested && identityProvider() == active.Identity;

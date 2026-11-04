@@ -13,6 +13,19 @@ public sealed partial class DurableConversationLedger
         CancellationToken cancellationToken = default) =>
         (await ReadConversationAsync(identity, cancellationToken).ConfigureAwait(false)).Context!;
 
+    /// <summary>Stop pending conversational replies, retaining the dialogue, focus and registered work.</summary>
+    public Task StopPendingRepliesAsync(ConversationIdentity identity, string currentSourceMessageId,
+        CancellationToken cancellationToken = default) => ChangeAsync(state =>
+        {
+            var source = RequireCurrentTrustedInput(state, identity, currentSourceMessageId);
+            InvalidateOldGenerations(state, identity, source.Revision);
+            InvalidateInputWork(state, identity, source.Revision, reset: true);
+            foreach (var message in state.Inbox.Where(x => x.Identity == identity && x.Revision < source.Revision
+                && x.Stage is InboxStage.Received or InboxStage.Grouped or InboxStage.Processing or InboxStage.Superseded).ToArray())
+                Replace(state.Inbox, message, message with { Stage = InboxStage.Cancelled });
+            return Changed(true);
+        }, cancellationToken);
+
     /// <summary>
     /// Trusted host fast path after recognizing an explicit new-dialogue request. Retains history,
     /// notifications and registered operations. Never reports a running task as cancelled.

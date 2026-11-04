@@ -6,10 +6,10 @@
 
 在 [Releases](https://github.com/BeteixZ/CodexDashboard/releases) 下载对应版本：
 
-| 产品 | v0.1.0 安装文件 |
+| 产品 | v0.1.1 安装文件 |
 | --- | --- |
-| Dashboard | `CodexDashboard-0.1.0-win-x64-Setup.exe` |
-| 助手 | `CodexAssistant-0.1.0-win-x64-Setup.exe` |
+| Dashboard | `CodexDashboard-0.1.1-win-x64-Setup.exe` |
+| 助手 | `CodexAssistant-0.1.1-win-x64-Setup.exe` |
 
 安装包面向 Windows x64，随包包含 .NET 运行环境和本机采集用 Python，无需安装 SDK 或额外下载本机 Python。远程采集仍需要 SSH 客户端、正常的远程登录、远端 Python 3 和可读取的 Codex 记录。
 
@@ -29,6 +29,8 @@
 ### 升级
 
 目前没有自动更新。退出要升级的产品，下载新版本安装程序，使用原安装位置安装。另一产品无须一起升级或退出。升级程序文件不会自动转换所有历史数据；涉及数据格式和恢复边界时，以对应版本说明为准。
+
+如需更换程序目录，先卸载现有版本，再安装到新目录。卸载会保留独立的数据目录。选择新位置时，程序目录与数据目录应彼此独立。
 
 ### 卸载
 

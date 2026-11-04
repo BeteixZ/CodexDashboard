@@ -59,7 +59,8 @@ internal static class CommitmentToolAdapterTests
             Require(result.State == ToolExecutionState.Completed && saved.WorkItems.Length == 1
                 && saved.Schedules.Single().DueAtUtc == p.Message.ReceivedAt.AddMinutes(10)
                 && saved.Schedules.Single().ReferenceTimeUtc == p.Message.ReceivedAt
-                && CommitmentToolAdapter.DescribeReceipt(p.Call, result).Contains(saved.WorkItems.Single().Id.ToString("D"))
+                && CommitmentToolAdapter.DescribeReceipt(p.Call, result).Contains("提醒你：看结果")
+                && !CommitmentToolAdapter.DescribeReceipt(p.Call, result).Contains(saved.WorkItems.Single().Id.ToString("D"))
                 && f.Gateway.TransportCalls == 0);
         });
         foreach (string mutation in new[] { "text", "time", "zone", "policy", "deadline", "missed" })
@@ -183,13 +184,13 @@ internal static class CommitmentToolAdapterTests
                 && update.State == ToolExecutionState.Completed);
             var pause = await f.Prepare("暂停提醒 " + work.Id.ToString("D"));
             var paused = await f.Adapter.ExecuteAsync(pause.Context, pause.Call, default);
-            Require(CommitmentToolAdapter.DescribeReceipt(pause.Call, paused).Contains("任务没有被中断"));
+            Require(CommitmentToolAdapter.DescribeReceipt(pause.Call, paused) == "已暂停“检查新结果”提醒。");
             await f.Finish(pause, paused);
             await f.Execute("恢复提醒 " + work.Id.ToString("D"));
             var cancel = await f.Prepare("取消提醒 " + work.Id.ToString("D"));
             var cancelled = await f.Adapter.ExecuteAsync(cancel.Context, cancel.Call, default);
             Require((await f.Ledger.GetCommitmentsAsync(Identity)).WorkItems.Single().Stage == TrackedWorkStage.Cancelled
-                && CommitmentToolAdapter.DescribeReceipt(cancel.Call, cancelled).Contains("结果未知的消息仍保留原状态"));
+                && CommitmentToolAdapter.DescribeReceipt(cancel.Call, cancelled) == "已取消“检查新结果”提醒，已发出的消息不会撤回。");
         });
         await Check("reminder_content_can_pause_resume_reschedule_and_cancel_without_model", async () =>
         {
@@ -220,6 +221,27 @@ internal static class CommitmentToolAdapterTests
             await f.Execute("取消提醒 " + works[0].Id.ToString("D"));
             await f.Execute("取消提醒 喝水");
             Require((await f.Ledger.GetCommitmentsAsync(Identity)).WorkItems.All(work => work.Stage == TrackedWorkStage.Cancelled));
+        });
+        await Check("same_name_reminders_can_be_selected_by_local_time", async () =>
+        {
+            await using var f = await New();
+            await f.Execute("明天9点提醒我喝水");
+            await f.Execute("明天10点提醒我喝水");
+            var ambiguous = await f.Adapter.ResolveAsync(await f.Receive("取消提醒 喝水"));
+            Require(ambiguous.Call == null && ambiguous.Reply!.Contains("09:00") && ambiguous.Reply.Contains("10:00"));
+            await f.Execute("取消提醒 喝水（明早9点）");
+            var saved = await f.Ledger.GetCommitmentsAsync(Identity);
+            var nine = saved.Schedules.Single(s => s.LocalTime.Contains("T09:00"));
+            Require(saved.WorkItems.Single(w => w.Id == nine.WorkItemId).Stage == TrackedWorkStage.Cancelled
+                && saved.WorkItems.Single(w => w.Id != nine.WorkItemId).Stage != TrackedWorkStage.Cancelled);
+        });
+        await Check("same_minute_reminders_are_not_guessed", async () =>
+        {
+            await using var f = await New();
+            await f.Execute("明天9点提醒我喝水");
+            await f.Execute("明天9点提醒我喝水");
+            var choice = await f.Adapter.ResolveAsync(await f.Receive("取消提醒 喝水（明早9点）"));
+            Require(choice.Call == null && (await f.Ledger.GetCommitmentsAsync(Identity)).WorkItems.All(w => w.Stage != TrackedWorkStage.Cancelled));
         });
         await Check("reminder_search_paginates_all_matches_without_changing_records", async () =>
         {

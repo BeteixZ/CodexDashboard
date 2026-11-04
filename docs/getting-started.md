@@ -1,10 +1,10 @@
 # 开始使用
 
-本指南适用于 v0.1.0 Windows x64 预发行安装包。两个产品可以单独使用。
+本指南适用于 v0.1.1 Windows x64 预发行安装包。两个产品可以单独使用。
 
 ## 下载安装
 
-1. 在本仓库 [Releases](https://github.com/BeteixZ/CodexDashboard/releases) 选择对应版本，下载 `CodexDashboard-0.1.0-win-x64-Setup.exe` 或 `CodexAssistant-0.1.0-win-x64-Setup.exe`。
+1. 在本仓库 [Releases](https://github.com/BeteixZ/CodexDashboard/releases) 选择对应版本，下载 `CodexDashboard-0.1.1-win-x64-Setup.exe` 或 `CodexAssistant-0.1.1-win-x64-Setup.exe`。
 2. 如需校验下载，使用发布页的 SHA-256 清单。示例：
 
    ```powershell

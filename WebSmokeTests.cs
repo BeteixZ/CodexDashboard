@@ -4,7 +4,6 @@ using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
-using System.Security.Cryptography;
 using System.Text.Json;
 using System.Threading.Tasks;
 
@@ -19,10 +18,13 @@ internal static class WebSmokeTests
         string originalKey = settings.WebAccessKey;
         settings.WebEnabled = true;
         using var client = new HttpClient(new HttpClientHandler { UseProxy = false }) { Timeout = TimeSpan.FromSeconds(5) };
-        async Task<HttpResponseMessage> Get(string path, string? key = null, string? host = null, HttpMethod? method = null)
+        async Task<HttpResponseMessage> Get(string path, string? key = null, string? host = null, HttpMethod? method = null, bool encodedKey = false)
         {
             using var request = new HttpRequestMessage(method ?? HttpMethod.Get, server.LocalUrl + path);
-            if (key != null) request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", key);
+            if (key != null)
+                request.Headers.Authorization = encodedKey
+                    ? new AuthenticationHeaderValue("CodexKey", Uri.EscapeDataString(key))
+                    : new AuthenticationHeaderValue("Bearer", key);
             if (host != null) request.Headers.Host = host;
             return await client.SendAsync(request);
         }
@@ -51,10 +53,13 @@ internal static class WebSmokeTests
             using (var response = await Get("/app.js")) checks["scriptServed"] = response.StatusCode == HttpStatusCode.OK;
             checks["privateNetworks"] = new[] { "127.0.0.1", "10.1.2.3", "172.16.0.1", "192.168.1.2", "100.64.1.1", "::ffff:127.0.0.1", "fd00::1" }.All(a => WebMonitorServer.IsPrivateAddress(IPAddress.Parse(a)))
                 && new[] { "8.8.8.8", "172.15.0.1", "100.63.0.1", "2001:4860:4860::8888" }.All(a => !WebMonitorServer.IsPrivateAddress(IPAddress.Parse(a)));
-            settings.WebAccessKey = Convert.ToHexString(RandomNumberGenerator.GetBytes(32)).ToLowerInvariant();
+            settings.WebAccessKey = "测试+a&b#%";
             await server.ConfigureAsync(settings, true);
+            var link = new Uri(WebMonitorServer.AccessUrl(server.LocalUrl, settings.WebAccessKey));
+            checks["shareLinkEncodesKey"] = link.Fragment == "#token=%E6%B5%8B%E8%AF%95%2Ba%26b%23%25" && link.Query.Length == 0;
             using (var response = await Get("/api/snapshot", originalKey)) checks["oldKeyRevoked"] = response.StatusCode == HttpStatusCode.Unauthorized;
-            using (var response = await Get("/api/snapshot", settings.WebAccessKey)) checks["newKeyAccepted"] = response.StatusCode == HttpStatusCode.OK;
+            using (var response = await Get("/api/snapshot", settings.WebAccessKey, encodedKey: true)) checks["newKeyAccepted"] = response.StatusCode == HttpStatusCode.OK;
+            using (var response = await Get("/api/snapshot", settings.WebAccessKey + "x", encodedKey: true)) checks["rejectsWrongEncodedKey"] = response.StatusCode == HttpStatusCode.Unauthorized;
             settings.WebEnabled = false;
             await server.ConfigureAsync(settings, true);
             checks["disableServer"] = server.LocalUrl.Length == 0;

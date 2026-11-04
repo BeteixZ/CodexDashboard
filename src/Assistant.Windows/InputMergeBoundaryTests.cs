@@ -42,9 +42,65 @@ internal static class InputMergeBoundaryTests
     }
     internal static async Task RunAsync(string directory, Action<string, bool> check)
     {
+        await RapidCorrectionsAsync(Path.Combine(directory, "rapid-before-model"), false, check);
+        await RapidCorrectionsAsync(Path.Combine(directory, "rapid-during-model"), true, check);
         await AdjacentTopicCounterexampleAsync(Path.Combine(directory, "adjacent-topics"), check);
         await TimeBoundaryAsync(Path.Combine(directory, "anchored-window"), false, check);
         await TimeBoundaryAsync(Path.Combine(directory, "clock-backward"), true, check);
+    }
+
+    private static async Task RapidCorrectionsAsync(string directory, bool originalInFlight, Action<string, bool> check)
+    {
+        string prefix = originalInFlight ? "rapid_during_model_" : "rapid_before_model_";
+        var clock = new MutableClock(DateTimeOffset.UtcNow.AddSeconds(-10));
+        await using var f = await DurableRuntimeTests.Fixture.CreateAsync(directory, clock: clock,
+            productionMergeWindowMilliseconds: 3000);
+        var originalStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var latestStarted = new TaskCompletionSource<ToolModelRequest>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource<ToolModelResponse>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var requests = new ConcurrentQueue<ToolModelRequest>();
+        string[] ids = ["rapid-original", "rapid-correction", "rapid-final"];
+        string[] bodies = ["帮我整理一下，周六上午去图书馆写摘要。", "不对，改成周日下午。", "刚才说错了，改为周一晚上。"];
+        f.Script.Handler = async (request, ct) =>
+        {
+            requests.Enqueue(request);
+            if (request.DeferredWork != null) return ToolModelResponse.Reply("这是已经改口的旧请求。");
+            if (request.CurrentMessage.SourceMessageId == WeChatText.Hash(ids[0]))
+            {
+                originalStarted.TrySetResult();
+                await Task.Delay(Timeout.InfiniteTimeSpan, ct);
+            }
+            latestStarted.TrySetResult(request);
+            return await release.Task;
+        };
+        try
+        {
+            await f.InputAsync(ids[0], bodies[0]);
+            if (originalInFlight)
+            {
+                await originalStarted.Task.WaitAsync(TimeSpan.FromSeconds(8));
+                clock.Advance(TimeSpan.FromSeconds(4));
+            }
+            await f.InputAsync(ids[1], bodies[1]);
+            await f.InputAsync(ids[2], bodies[2]);
+            var request = await latestStarted.Task.WaitAsync(TimeSpan.FromSeconds(8));
+            var saved = await f.ReadAsync();
+            var inputs = saved.Inbox.OrderBy(item => item.Revision).ToArray();
+            var generation = saved.Generations.Single(item => item.Id == inputs[^1].GenerationId);
+            check(prefix + "intermediate_correction_has_not_started_generation",
+                request.CurrentMessage.Id == inputs[^1].Id && inputs.Select(item => item.Body).SequenceEqual(bodies)
+                && requests.Count == (originalInFlight ? 2 : 1) && !release.Task.IsCompleted);
+            check(prefix + "latest_generation_covers_both_corrections_and_original",
+                generation.InboxIds.SequenceEqual(inputs.Select(item => item.Id)));
+            release.TrySetResult(ToolModelResponse.Reply("周一晚上去图书馆写摘要。"));
+            await OwnedHostRuntimeTests.WaitReplyAsync(f, ids[2]);
+            var work = await f.Ledger.QueueAvailableInputWorkAsync(f.Runtime.Identity!);
+            var completed = await f.ReadAsync();
+            check(prefix + "original_requests_are_not_deferred_after_final_reply",
+                work.IsEmpty && completed.InputWork.IsEmpty && completed.Operations.IsEmpty && completed.Authorizations.IsEmpty
+                && f.Sent.ToArray().SequenceEqual(new[] { "周一晚上去图书馆写摘要。" }));
+        }
+        finally { release.TrySetResult(ToolModelResponse.Reply("释放合成调用。")); }
     }
 
     private static async Task AdjacentTopicCounterexampleAsync(string directory, Action<string, bool> check)

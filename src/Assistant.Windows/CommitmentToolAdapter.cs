@@ -30,6 +30,7 @@ internal sealed class CommitmentToolAdapter : IToolExecutor, IUserAuthorizationP
     private static readonly Regex Update = new(@"\A" + Prefix + @"(?:修改|更新)(?<kind>提醒|事项)\s+(?<id>[0-9A-Fa-f-]{32,36})\s+(?:(?:改为|改成)\s*)?(?<request>[\s\S]+)\z", Options);
     private static readonly Regex NamedChange = new(@"\A" + Prefix + @"(?<action>暂停|恢复|取消|删除)提醒\s+(?<name>[^\r\n]+?)\z", Options);
     private static readonly Regex NamedUpdate = new(@"\A" + Prefix + @"(?:修改|更新)提醒\s+(?<name>[^\r\n]+?)\s+(?:改为|改成)\s+(?<request>[^\r\n]+)\z", Options);
+    private static readonly Regex NamedReminderTime = new(@"\A(?<name>.+?)[（(](?<when>[^（）()]+)[）)]\z", Options);
     private static readonly Regex PolicyLead = new(@"\A" + Prefix + @"(?:设置|清除)(?:提醒|订阅|事项)", Options);
     private static readonly Regex PolicyCommand = new(@"\A" + Prefix + @"(?<action>设置|清除)(?<kind>提醒|订阅|事项)\s+(?<id>[0-9A-Fa-f-]{32,36})\s+(?<rule>安静时段(?:\s+(?<start>[0-9]{2}:[0-9]{2})-(?<end>[0-9]{2}:[0-9]{2}))?|错过时跳过|恢复后提醒一次|需要我决定|每24小时最多(?<limit>[0-9]{1,3})次)[。!！]?\z", Options);
     private static readonly Regex VagueQuiet = new(@"\A" + Prefix + @"(?:晚上|夜里|夜间|今晚)(?:别打扰|不要打扰|别提醒我|别发消息|不要发消息)[。!！]?\z", Options);
@@ -101,9 +102,23 @@ internal sealed class CommitmentToolAdapter : IToolExecutor, IUserAuthorizationP
                 var matches = snapshot.WorkItems.Where(work => work.Kind == TrackedWorkKind.Reminder
                     && work.Stage is not (TrackedWorkStage.Completed or TrackedWorkStage.Cancelled or TrackedWorkStage.Expired)
                     && string.Equals(work.Goal, name, StringComparison.Ordinal)).ToArray();
+                if (matches.Length == 0 && NamedReminderTime.Match(name) is { Success: true } timed)
+                {
+                    string content = timed.Groups["name"].Value.Trim();
+                    var selectedTime = ReminderCommandResolver.Resolve(timed.Groups["when"].Value + "提醒我" + content, source.ReceivedAt, zone());
+                    if (selectedTime.IsReady)
+                        matches = snapshot.WorkItems.Where(work => work.Kind == TrackedWorkKind.Reminder
+                            && work.Stage is not (TrackedWorkStage.Completed or TrackedWorkStage.Cancelled or TrackedWorkStage.Expired)
+                            && work.Goal == content && snapshot.Schedules.Any(schedule => schedule.WorkItemId == work.Id
+                                && schedule.TimeZoneId == selectedTime.TimeZoneId
+                                && schedule.LocalTime[..16] == selectedTime.LocalTime[..16])).ToArray();
+                }
                 if (matches.Length == 0) return Clarify("没有找到内容为“" + name + "”的未结束提醒。发“提醒列表”核对内容或编号。");
-                if (matches.Length > 1) return Clarify("有多条“" + name + "”提醒，请用编号指定：\n"
-                    + string.Join("\n", matches.Take(8).Select(work => work.Id.ToString("D") + "  " + Stage(work)))
+                if (matches.Length > 1) return Clarify("有多条“" + name + "”提醒，请在内容后加时间，例如“取消提醒 喝水（明早9点）”；同一分钟仍有多条时用编号：\n"
+                    + string.Join("\n", matches.Take(8).Select(work =>
+                        (snapshot.Schedules.SingleOrDefault(s => s.WorkItemId == work.Id) is { } schedule
+                            ? ReminderTime(schedule.LocalTime, schedule.TimeZoneId) + "  " : "")
+                        + work.Id.ToString("D") + "  " + Stage(work)))
                     + (matches.Length > 8 ? "\n更多记录请发“提醒列表”。" : ""));
                 string command = namedUpdate.Success
                     ? "修改提醒 " + matches[0].Id.ToString("D") + " " + namedUpdate.Groups["request"].Value
@@ -422,7 +437,7 @@ internal sealed class CommitmentToolAdapter : IToolExecutor, IUserAuthorizationP
         if (next != null) text.Append("下一页：").Append(pageCommand).Append(next).Append(pageSuffix).Append('\n');
         var daily = budget.Windows.Single(w => w.Kind == CommitmentBudgetKind.Notification && w.Window == TimeSpan.FromDays(1));
         text.Append("同一绑定的提醒与订阅通知还受共享预算限制：滚动24小时最多").Append(daily.Limit).Append("次。\n");
-        text.Append("提醒可按完整内容暂停、恢复或取消，例如“取消提醒 喝水”；同名多条时请指定编号。订阅和规则设置请写事项完整编号；删除保留历史记录。接续记录另用“取消接续”。接口受理不等于手机已收到。");
+        text.Append("提醒可按完整内容暂停、恢复或取消，例如“取消提醒 喝水”；同名多条可加时间，例如“取消提醒 喝水（明早9点）”；同一分钟仍有多条时指定编号。订阅和规则设置请写事项完整编号；删除保留历史记录。接续记录另用“取消接续”。接口受理不等于手机已收到。");
         return currentBinding(identity) ? new(text.ToString(), page, total, next) : new("当前微信绑定已变化，没有读取其他绑定的事项。", page, 0, null, false);
     }
     internal static string DescribeReceipt(ModelToolCall call, ToolExecutionResult result)
@@ -435,6 +450,13 @@ internal sealed class CommitmentToolAdapter : IToolExecutor, IUserAuthorizationP
         {
             using var document = JsonDocument.Parse(call.ArgumentsJson);
             string action = document.RootElement.GetProperty("action").GetString()!;
+            if (facts.GetProperty("kind").GetString() == "Reminder")
+            {
+                string goal = facts.GetProperty("goal").GetString()!;
+                if (action == "pause") return "已暂停“" + goal + "”提醒。";
+                if (action == "resume") return "已恢复“" + goal + "”提醒，电脑上的助手需保持运行。";
+                if (action == "cancel") return "已取消“" + goal + "”提醒，已发出的消息不会撤回。";
+            }
             if (action == "pause") return "已暂停这项提醒或订阅。编号 " + id + "。任务没有被中断，已发送消息不会撤回。";
             if (action == "cancel") return "已取消这项提醒或订阅。编号 " + id + "。历史记录保留，没有物理删除。任务没有被中断，已发送或结果未知的消息仍保留原状态。";
             if (action == "resume") return "已恢复这项提醒或订阅。编号 " + id + "。只会通知或做只读检查。";
@@ -451,13 +473,14 @@ internal sealed class CommitmentToolAdapter : IToolExecutor, IUserAuthorizationP
                     return "已更新这项提醒的错过时间处理：" + MissedSummary(missed.GetString()!) + "。编号 " + id + "。原提醒时间和内容保留。";
                 if (facts.TryGetProperty("localTime", out var updatedLocal) && updatedLocal.ValueKind == JsonValueKind.String)
                     return "提醒已改到 " + ReminderTime(updatedLocal.GetString()!, facts.GetProperty("timeZoneId").GetString()!)
-                        + "。\n编号：" + id;
+                        + "：" + facts.GetProperty("goal").GetString() + "。";
                 return "事项修改已保存。编号 " + id + "。请查看事项列表核对实际规则。";
             }
         }
         if (facts.TryGetProperty("localTime", out var local) && local.ValueKind == JsonValueKind.String)
             return "安排好了，" + ReminderTime(local.GetString()!, facts.GetProperty("timeZoneId").GetString()!)
-                + " 提醒你。记得让电脑上的助手保持运行；暂时发不出会留待补报。\n编号：" + id;
+                + " 提醒你：" + facts.GetProperty("goal").GetString()
+                + "。电脑上的助手需保持运行；暂时发不出会留待补报。";
         return "订阅好了，会跟进刚核对的这一轮任务，只通知或查询，不会替你继续或中断任务。"
             + "助手需要保持运行；暂时发不出会留待补报。\n编号：" + id;
     }

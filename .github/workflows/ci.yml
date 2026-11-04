@@ -49,5 +49,7 @@ jobs:
             ${{ runner.temp }}/project-checks/*.log
             ${{ runner.temp }}/project-checks/**/checks.json
             ${{ runner.temp }}/project-checks/readonly/readonly-checks.json
+            ${{ runner.temp }}/project-checks/assistant-input-merge/input-merge-boundary-checks.json
+            ${{ runner.temp }}/project-checks/assistant-dependency-recovery/dependency-recovery-checks.json
           if-no-files-found: warn
           retention-days: 14

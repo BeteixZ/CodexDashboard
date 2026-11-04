@@ -164,6 +164,11 @@ public partial class AssistantMemoryWindow : Window
         {
             var captured = assistant.Memory.CaptureEditorSnapshot();
             if (!SameProfile() || captured.Profile != profile) return false;
+            if (rulesSnapshot != null && rulesSnapshot.Rules == captured.Rules)
+            {
+                rulesSnapshot = captured;
+                if (RulesStatus.Text == ConflictMessage) RulesStatus.Text = "";
+            }
             string? selectedId = (MemoryList.SelectedItem as AssistantMemoryEntry)?.Id;
             replacingView = true;
             try { memorySnapshot = captured; ApplyMemoryFilter(selectedId); MemoryText.Clear(); }
@@ -233,6 +238,10 @@ public partial class AssistantMemoryWindow : Window
             if (captured.Rules != RulesBox.Text)
             { RulesStatus.Text = "本次规则已保存，但保存后又有更新。请重新读取核对；当前编辑内容仍保留。"; return; }
             rulesSnapshot = captured;
+            // Saving rules changes the shared revision, but does not invalidate
+            // a memory draft whose complete entry snapshot is unchanged.
+            if (memorySnapshot != null && memorySnapshot.Entries.SequenceEqual(captured.Entries))
+                memorySnapshot = captured;
             RulesStatus.Text = "规则已保存，下次回答生效。";
         }
         catch (AssistantMemoryEditorConflictException ex) { if (SameProfile()) RulesStatus.Text = ex.Message; }

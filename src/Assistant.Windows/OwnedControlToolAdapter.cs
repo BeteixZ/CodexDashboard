@@ -149,7 +149,7 @@ internal sealed class OwnedControlToolAdapter(OwnedControlRuntime runtime) : ITo
         {
             case "resume_owned_task":
                 if (!Regex.IsMatch(body, @"^(?:请|帮我|麻烦)?(?:恢复|继续|接续|运行|执行)")
-                    || !(Contains(body, target.Handle.Identity.ThreadId) || Regex.IsMatch(body, @"^(?:请)?(?:恢复当前任务|继续当前任务)(?:控制)?(?:\s*[:：]\s*\S|[。]?$)"))
+                    || !(Contains(body, target.Handle.Identity.ThreadId) || Regex.IsMatch(body, @"^(?:请|帮我|麻烦)?(?:恢复当前任务|继续当前任务)(?:控制)?(?:\s*[:：]\s*\S|[。]?$)"))
                     || target.Snapshot.State is not (OwnedTaskState.Idle or OwnedTaskState.Completed or OwnedTaskState.Failed or OwnedTaskState.Interrupted))
                     return Deny("恢复控制需要明确任务编号和已核对的空闲状态。");
                 break;
@@ -559,6 +559,8 @@ internal sealed class OwnedControlToolAdapter(OwnedControlRuntime runtime) : ITo
             report.EvidenceSource, report.IndependentlyVerified, reportSelfClaim = true,
             totalFinalTextCharacters = report.FinalText.Length, retainedFinalTextCharacters = text.Sum(t => t.Length),
             totalCommandItems = report.Commands.Length, retainedCommandItems = commands.Length,
+            commandItemsCoverAllExecution = false, emptyCommandItemsProveNoExecution = false,
+            executionEvidenceScope = "仅统计thread/read返回的commandExecution项；exec等其他工具调用可能未投影到此列表。空列表不证明没有执行，任务正文也不能单独证明执行或审批成功。",
             fileChangeCountIsLowerBound = changes.Length > maximumItems, retainedFileChanges = Math.Min(changes.Length, maximumItems),
             excludedFields = new[] { "analysis", "command", "aggregatedOutput", "environment", "diff", "rawItem" },
             summaryFieldLimits = new { id = 128, path = 512, statusAndKind = 32 },
@@ -612,6 +614,7 @@ internal sealed class OwnedControlToolAdapter(OwnedControlRuntime runtime) : ITo
         // This narrow language branch uses independently persisted user-selected context.
         // Never rewrite Inbox.Task or infer a selection from an assistant reply/notification.
         string phrase = text.TrimEnd('。', '！', '!', '.', ' ');
+        phrase = Regex.Replace(phrase, @"^(?:请|帮我|麻烦)", "", RegexOptions.CultureInvariant);
         bool explicitCurrent = phrase.Contains("当前任务", StringComparison.Ordinal);
         bool exactRequest = action switch
         {

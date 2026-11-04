@@ -341,23 +341,25 @@ def collect(home: Optional[Union[str, pathlib.Path]] = None, limit: int = 120, n
         projects = {}
         if 'projects' in tables:
             projects = {r['id']: r['name'] for r in state.execute('SELECT id,name FROM projects')}
-        candidates = state.execute('SELECT ' + ','.join(fields) + ' FROM threads WHERE archived=0 ORDER BY updated_at DESC').fetchall()
+        candidates = state.execute('SELECT ' + ','.join(fields) + ' FROM threads WHERE archived=0 ORDER BY updated_at DESC')
         rows = []
+        truncated = False
         for row in candidates:
             row = dict(row)
             source = str(row.get('source', '')).lower()
             if row['id'] in children or 'subagent' in source or 'sub_agent' in source or source == 'exec':
                 continue
-            rows.append(row)
             if len(rows) >= limit:
+                truncated = True
                 break
-        truncated = len(rows) == limit
+            rows.append(row)
+        candidates.close()
         hp = home / 'thread_history_1.sqlite'
         if hp.exists():
             try:
                 history = ro_db(hp)
-                history.execute('SELECT thread_id, turn_id, status FROM thread_turns LIMIT 0')
-                history.execute('SELECT item_type, item_json FROM thread_items LIMIT 0')
+                history.execute('SELECT thread_id, turn_id, status, started_at, completed_at, rollout_ordinal FROM thread_turns LIMIT 0')
+                history.execute('SELECT thread_id, turn_id, item_type, item_json, created_at_ms, rollout_ordinal FROM thread_items LIMIT 0')
             except sqlite3.Error:
                 if history:
                     history.close()

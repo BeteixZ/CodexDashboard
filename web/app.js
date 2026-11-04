@@ -144,7 +144,7 @@ async function refresh(fromLogin = false) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 8000);
   try {
-    const response = await fetch('/api/snapshot', { headers: { Authorization: `Bearer ${state.key}` }, cache: 'no-store', credentials: 'omit', signal: controller.signal });
+    const response = await fetch('/api/snapshot', { headers: { Authorization: `CodexKey ${encodeURIComponent(requestKey)}` }, cache: 'no-store', credentials: 'omit', signal: controller.signal });
     if (state.key !== requestKey) return;
     if (response.status === 401) { disconnectedLogin('访问密钥不正确或已在桌面端更新，请重新输入。'); return; }
     if (!response.ok) throw new Error(`连接失败（${response.status}）`);

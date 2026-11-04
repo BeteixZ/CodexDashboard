@@ -12,10 +12,23 @@ namespace CodexDashboard;
 internal sealed partial class DurableAssistantRuntime
 {
     private static bool IsConversationCommand(string text)
-        => text is "新对话" or "当前任务" or "任务列表" or "选择任务"
+        => IsStopReplyCommand(text) || IsNewDialogueCommand(text) || text is "当前任务" or "任务列表" or "选择任务"
             || text.StartsWith("切换到 ", StringComparison.Ordinal)
             || text.StartsWith("选择任务 ", StringComparison.Ordinal)
             || Regex.IsMatch(text, @"^(?:选择\s*)?[0-9]{1,3}$", RegexOptions.CultureInvariant);
+
+    internal static bool IsStopReplyCommand(string text)
+        => text.Trim().TrimEnd('。', '！', '!', '.') is "停止回答" or "先别回答了" or "不用继续回答了"
+            or "不用回答了" or "别回答了" or "先别回复了" or "不用回复了" or "别回了" or "先别回了";
+
+    internal static bool IsNewDialogueCommand(string text)
+        => text.Trim().TrimEnd('。', '！', '!') is "新对话" or "开始新对话" or "重新开始聊天" or "我们重新聊";
+
+    private string ConversationHelp()
+        => (settings.ChatGpt.Enabled ? "直接说你想聊什么，或把想让我帮忙的事发过来。" : "聊天问答还没开启，需要先在电脑端设置里开启并登录。")
+            + "\n说“停止回答”可以先停下回复；说“开始新对话”可以从头聊。"
+            + "\n查任务发“任务列表”，按序号选；查提醒发“事项列表”，查记忆发“查看记忆”。"
+            + "\n图片和文件用法见“文件帮助”，当前可用功能见“渠道能力”。";
 
     private async Task<DurableFastReply?> HandleConversationCommandAsync(DurableFastContext command, CancellationToken ct)
     {
@@ -23,7 +36,12 @@ internal sealed partial class DurableAssistantRuntime
         string text = message.Body.Trim();
         if (!IsConversationCommand(text)) return null;
         if (!command.StillCurrent()) throw new OperationCanceledException(ct);
-        if (text == "新对话")
+        if (IsStopReplyCommand(text))
+        {
+            await ledger.StopPendingRepliesAsync(message.Identity, message.SourceMessageId, ct);
+            return new(["好，先不继续回答了。"]);
+        }
+        if (IsNewDialogueCommand(text))
         {
             OwnedRuntime?.ClearFocus();
             await ledger.BeginNewDialogueAsync(message.Identity, message.SourceMessageId, ct);

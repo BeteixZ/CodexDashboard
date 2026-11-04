@@ -1,20 +1,20 @@
-<Window x:Class="CodexDashboard.AssistantMemoryWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:local="clr-namespace:CodexDashboard" Title="AI 规则与长期记忆" Style="{StaticResource ShellWindow}" ThemeMode="Light" Width="820" Height="760" MinWidth="660" MinHeight="620" WindowStartupLocation="CenterOwner" ShowInTaskbar="True">
+<Window x:Class="CodexDashboard.AssistantMemoryWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:local="clr-namespace:CodexDashboard" Title="人设与记忆" Style="{StaticResource ShellWindow}" ThemeMode="Light" Width="820" Height="760" MinWidth="660" MinHeight="620" WindowStartupLocation="CenterOwner" ShowInTaskbar="True">
  <Window.Resources><local:ProjectMemoryScopeConverter x:Key="ProjectMemoryScope"/></Window.Resources>
  <DockPanel Margin="24">
   <Button DockPanel.Dock="Bottom" Content="完成" Click="CloseClicked" HorizontalAlignment="Right" Margin="0,12,0,0" Padding="24,8"/>
   <StackPanel DockPanel.Dock="Top">
-   <TextBlock Text="规则与长期记忆" FontSize="24" FontWeight="SemiBold"/>
-   <TextBlock Text="按当前 ChatGPT 账户和绑定微信用户分别保存。重启或切换模型后保留；“新对话”只清临时对话。" TextWrapping="Wrap" Style="{StaticResource MutedText}" Margin="0,8,0,10"/>
+   <TextBlock Text="人设与记忆" FontSize="24" FontWeight="SemiBold"/>
+   <TextBlock Text="按当前 ChatGPT 账户和绑定微信用户分别保存。重启或切换模型后保留；“新对话”重新开始聊天，不删除记忆。" TextWrapping="Wrap" Style="{StaticResource MutedText}" Margin="0,8,0,10"/>
    <CheckBox x:Name="UseMemoryBox" Content="在问答、进展解读和完成摘要中使用规则与长期记忆" Click="EnabledChanged"/>
    <CheckBox x:Name="AutoMemoryBox" Content="从日常微信对话自动记住长期偏好" Click="AutoMemoryChanged" Margin="0,8,0,0"/>
-   <TextBlock Text="规则和记忆随回答请求发送给所选模型，使用订阅额度。自动提取在当前对话流程中处理，工具执行后可能再次生成回答；只保存明确的长期偏好。手动管理和来源查询在本机处理。记忆不能改变任务权限。" TextWrapping="Wrap" Style="{StaticResource MutedText}" FontSize="12" Margin="0,8,0,12"/>
+   <TextBlock Text="设定和记忆随聊天请求发送给当前模型，使用订阅额度。开启自动记忆后会保存明确的长期偏好；关闭后停止自动新增，已有记忆保留。此窗口的编辑和来源查看在本机完成。记忆不能授予任务操作权限。" TextWrapping="Wrap" Style="{StaticResource MutedText}" FontSize="12" Margin="0,8,0,12"/>
   </StackPanel>
   <TabControl x:Name="EditorTabs">
-   <TabItem Header="AGENTS.md 规则">
+   <TabItem Header="说话方式">
     <DockPanel Margin="12">
-     <TextBlock DockPanel.Dock="Top" Text="设置语言、报告格式和回答偏好。保存后对下一次回答生效，最多 8000 字符。" TextWrapping="Wrap" Margin="0,0,0,8"/>
+     <TextBlock DockPanel.Dock="Top" Text="设置助手的称呼、语气和回答习惯，例如“语气直接，回答简短”。保存后从下一次回答生效，最多 8000 字符。" TextWrapping="Wrap" Margin="0,0,0,8"/>
      <StackPanel DockPanel.Dock="Bottom" Margin="0,10,0,0">
-      <WrapPanel><Button x:Name="SaveRulesButton" Content="保存规则" Click="SaveRulesClicked" Margin="0,0,8,8"/><Button x:Name="ReloadRulesButton" Content="重新读取文件" Click="ReloadRulesClicked" Margin="0,0,8,8"/><Button Content="打开数据文件夹" Click="OpenFolderClicked" Margin="0,0,0,8"/></WrapPanel>
+      <WrapPanel><Button x:Name="SaveRulesButton" Content="保存说话方式" Click="SaveRulesClicked" Margin="0,0,8,8"/><Button x:Name="ReloadRulesButton" Content="重新读取文件" Click="ReloadRulesClicked" Margin="0,0,8,8"/><Button Content="打开数据文件夹" Click="OpenFolderClicked" Margin="0,0,0,8"/></WrapPanel>
       <TextBlock x:Name="RulesLocation" TextWrapping="Wrap" Style="{StaticResource MutedText}" FontSize="11"/>
       <TextBlock x:Name="RulesStatus" TextWrapping="Wrap" Margin="0,6,0,0"/>
      </StackPanel>
@@ -29,6 +29,7 @@
       <TextBlock x:Name="MemoryCountText" TextWrapping="Wrap" Margin="0,0,0,8"/>
      </StackPanel>
      <ListBox x:Name="MemoryList" Grid.Row="1" MinHeight="90" MaxHeight="180" SelectionChanged="MemorySelected" ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+      <ListBox.ItemContainerStyle><Style TargetType="ListBoxItem"><Setter Property="AutomationProperties.Name" Value="{Binding Text}"/></Style></ListBox.ItemContainerStyle>
       <ListBox.ItemTemplate><DataTemplate><StackPanel Margin="3,5"><TextBlock Text="{Binding Id}" FontFamily="Consolas" FontSize="11" Foreground="#61656D"/><TextBlock Text="{Binding SourceSummary}" TextWrapping="Wrap" FontSize="11" Foreground="#61656D"/><TextBlock Text="{Binding Converter={StaticResource ProjectMemoryScope}}" TextWrapping="Wrap" FontSize="11" Foreground="#61656D"><TextBlock.Style><Style TargetType="TextBlock"><Style.Triggers><Trigger Property="Text" Value=""><Setter Property="Visibility" Value="Collapsed"/></Trigger></Style.Triggers></Style></TextBlock.Style></TextBlock><TextBlock Text="{Binding Text}" TextWrapping="Wrap" Margin="0,3,0,0"/></StackPanel></DataTemplate></ListBox.ItemTemplate>
      </ListBox>
      <StackPanel Grid.Row="2" Margin="0,10,0,6">

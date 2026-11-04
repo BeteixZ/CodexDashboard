@@ -115,10 +115,18 @@ public sealed class WebMonitorServer : IAsyncDisposable
 
     public static bool Authorized(string header, byte[] key)
     {
-        if (!header.StartsWith("Bearer ", StringComparison.Ordinal)) return false;
-        byte[] supplied = Encoding.UTF8.GetBytes(header[7..]);
+        const string encodedScheme = "CodexKey ";
+        string suppliedKey;
+        if (header.StartsWith(encodedScheme, StringComparison.Ordinal))
+            suppliedKey = Uri.UnescapeDataString(header[encodedScheme.Length..]);
+        else if (header.StartsWith("Bearer ", StringComparison.Ordinal))
+            suppliedKey = header[7..];
+        else return false;
+        byte[] supplied = Encoding.UTF8.GetBytes(suppliedKey);
         return supplied.Length == key.Length && CryptographicOperations.FixedTimeEquals(supplied, key);
     }
+    internal static string AccessUrl(string address, string key) =>
+        address.Length > 0 ? address + "/#token=" + Uri.EscapeDataString(key) : "";
     public static bool IsPrivateAddress(IPAddress? address)
     {
         if (address == null) return false;

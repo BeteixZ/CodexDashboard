@@ -14,6 +14,7 @@ internal sealed partial class DurableAssistantRuntime
     private Task dependentWorker = Task.CompletedTask;
     private readonly SemaphoreSlim dependencyCycle = new(1, 1);
     private int dependencyCursor;
+    private int dependencyResultCursor;
     private bool DependencyControlEnabled() => settings.ChatGpt.TaskControlEnabled && settings.WeChat.ClawBotEnabled
         && settings.ChatGpt.IncludeTaskContext && Volatile.Read(ref ownedDeliveryFault) == 0;
 
@@ -74,8 +75,13 @@ internal sealed partial class DurableAssistantRuntime
                 await runtime.DispatchDependencyAsync(lease, () => IsCurrentBinding(active) && DependencyControlEnabled(), ct).ConfigureAwait(false);
         }
         if (!IsCurrentBinding(active) || !DependencyControlEnabled() || runtime == null || !runtime.Active || runtime.Identity != active) return;
-        // Event delivery normally supplies this evidence. Read once when recovering a missed event.
-        foreach (var work in (await ledger.GetDependentWorkAsync(active, ct)).WorkItems.Where(w => w.ResultTask != null && w.Completion == null).Take(8))
+        // Rotate the fallback reads so earlier running work cannot hide a missed completion.
+        var pendingResults = (await ledger.GetDependentWorkAsync(active, ct)).WorkItems
+            .Where(w => w.ResultTask != null && w.Completion == null).ToArray();
+        int resultStart = pendingResults.Length == 0 ? 0 : dependencyResultCursor % pendingResults.Length;
+        var resultBatch = pendingResults.Skip(resultStart).Concat(pendingResults.Take(resultStart)).Take(8).ToArray();
+        dependencyResultCursor = resultStart + resultBatch.Length;
+        foreach (var work in resultBatch)
         {
             var proof = await runtime.ReadDependencyEvidenceAsync(work.ResultTask!, ct).ConfigureAwait(false);
             if (proof != null && IsCurrentBinding(active))

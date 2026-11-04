@@ -4,7 +4,7 @@
 
 在 Windows 桌面集中查看 Codex 任务，并通过独立助手查询进展、管理提醒和安排后续工作。
 
-这是社区项目，与 OpenAI 无隶属关系。当前版本为 **v0.1.0 预发行版**，适合试用和反馈；复杂控制、恢复和长期运行仍有待验证。
+这是社区项目，与 OpenAI 无隶属关系。当前版本为 **v0.1.1 预发行版**，适合试用和反馈；复杂控制、恢复和长期运行仍有待验证。
 
 ## 两个独立的软件
 
@@ -23,8 +23,8 @@
 
 从 [Releases](https://github.com/BeteixZ/CodexDashboard/releases) 下载对应产品的 **Windows x64 安装程序**，双击后按提示完成安装。
 
-- Dashboard：`CodexDashboard-0.1.0-win-x64-Setup.exe`。
-- 助手：`CodexAssistant-0.1.0-win-x64-Setup.exe`。
+- Dashboard：`CodexDashboard-0.1.1-win-x64-Setup.exe`。
+- 助手：`CodexAssistant-0.1.1-win-x64-Setup.exe`。
 - 安装包包含所需的 .NET 运行环境和本机采集用 Python，无需另装 .NET SDK 或 Python。
 - 新安装分别使用独立数据目录，不自动接管旧版设置、微信绑定或凭据。
 - 当前安装程序**尚未数字签名**，Windows 可能显示未知发布者。发布页提供 SHA-256 校验值；校验值只能核对文件一致性，不能代替发布者签名。

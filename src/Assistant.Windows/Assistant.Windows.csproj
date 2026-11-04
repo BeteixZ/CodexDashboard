@@ -10,6 +10,8 @@
     <ApplicationManifest>../../app.manifest</ApplicationManifest>
   </PropertyGroup>
   <ItemGroup>
+    <EmbeddedResource Include="Skills/natural-dialogue/SKILL.md" LogicalName="CodexAssistant.Skills.NaturalDialogue" />
+    <Content Include="Skills/natural-dialogue/THIRD-PARTY-NOTICES.txt" Link="licenses/natural-dialogue.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Page Remove="AssistantApp.xaml" />
     <ApplicationDefinition Include="AssistantApp.xaml" />
     <ProjectReference Include="../Codex.ReadOnly/Codex.ReadOnly.csproj" />

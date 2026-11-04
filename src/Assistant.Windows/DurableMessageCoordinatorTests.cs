@@ -20,6 +20,8 @@ internal static class DurableMessageCoordinatorTests
         ("accept_is_durable_before_model_completion", AcceptBeforeModel),
         ("short_burst_preserves_all_inputs", ShortBurst),
         ("explicit_correction_covers_pending_reply_without_deferred_duplicate", PendingCorrection),
+        ("repeated_corrections_cover_original_pending_group", RepeatedCorrections),
+        ("stop_reply_preserves_context_and_survives_restart", StopReply),
         ("fast_query_bypasses_noncooperative_model", FastQuery),
         ("trusted_fast_path_uses_current_user_grant", TrustedFastPath),
         ("new_input_blocks_old_remaining_segments", SupersededSegments),
@@ -127,6 +129,87 @@ internal static class DurableMessageCoordinatorTests
         Equal(2, state.Generations.Single(g => g.Stage == GenerationStage.HandedToOutbox).InboxIds.Length);
         Equal(0, state.InputWork.Length);
         Equal(1, f.Sends.Count);
+    }
+
+    private static async Task RepeatedCorrections()
+    {
+        await using var f = new Fixture();
+        var first = Signal(); var second = Signal();
+        var model = new Model(async (request, ct) =>
+        {
+            if (request.DeferredWork != null) return ToolModelResponse.Reply("obsolete deferred answer");
+            if (request.CurrentMessage.SourceMessageId != "third")
+            {
+                (request.CurrentMessage.SourceMessageId == "first" ? first : second).TrySetResult();
+                await Task.Delay(Timeout.Infinite, ct);
+            }
+            return ToolModelResponse.Reply("final correction only");
+        });
+        await using var c = f.Coordinator(model, options: new()
+        {
+            MergeWindow = TimeSpan.Zero,
+            ReplacesPendingReply = (_, current) => current.Body.StartsWith("replace")
+        });
+        await c.ActivateSessionAsync(Identity);
+        await c.AcceptAsync(Identity, "first", "original request", DateTimeOffset.UtcNow);
+        await first.Task;
+        await c.AcceptAsync(Identity, "second", "replace with shorter answer", DateTimeOffset.UtcNow);
+        await second.Task;
+        await c.AcceptAsync(Identity, "third", "replace with one sentence", DateTimeOffset.UtcNow);
+        await UntilAsync(async () => (await f.Read()).Outbox.Any(o => o.Stage == OutboxStage.Accepted));
+        var state = await f.Read();
+        Equal(3, state.Generations.Single(g => g.Stage == GenerationStage.HandedToOutbox
+            && g.InboxIds.Contains(state.Inbox.Single(i => i.SourceMessageId == "third").Id)).InboxIds.Length);
+        Equal(0, (await f.Ledger.QueueAvailableInputWorkAsync(Identity)).Length);
+        Equal(0, (await f.Read()).InputWork.Length);
+        Equal(1, f.Sends.Count);
+    }
+
+    private static async Task StopReply()
+    {
+        await using var f = new Fixture();
+        await f.Ledger.ReceiveAsync(Identity, "registered", "run task", MessageTrust.AuthenticatedUser, DateTimeOffset.UtcNow);
+        var grant = await f.Ledger.AuthorizeCurrentUserRequestAsync(Identity, "registered", "send_to_task", "local/A", "{}", "run task");
+        var operation = await f.Ledger.QueueOperationAsync(Identity, grant.Id, "registered-operation");
+        var entered = Signal();
+        var model = new Model(async (_, ct) =>
+        {
+            entered.TrySetResult();
+            await Task.Delay(Timeout.Infinite, ct);
+            return ToolModelResponse.Reply("obsolete");
+        });
+        ConversationContext original;
+        await using (var c = f.Coordinator(model, trusted: async (command, ct) =>
+        {
+            if (command.Message.Body != "停止回答") return null;
+            await f.Ledger.StopPendingRepliesAsync(Identity, command.Message.SourceMessageId, ct);
+            return new(["好，先不继续回答了。"]);
+        }))
+        {
+            await c.ActivateSessionAsync(Identity);
+            await c.AcceptAsync(Identity, "long", "记着猫叫豆包，慢慢讲", DateTimeOffset.UtcNow);
+            await entered.Task;
+            original = await f.Ledger.ReadConversationContextAsync(Identity);
+            await c.AcceptAsync(Identity, "stop", "停止回答", DateTimeOffset.UtcNow);
+            await UntilAsync(async () => (await f.Read()).Outbox.Any(x => x.Stage == OutboxStage.Accepted));
+            Equal(original, await f.Ledger.ReadConversationContextAsync(Identity));
+            Equal(0, (await f.Ledger.QueueAvailableInputWorkAsync(Identity)).Length);
+            Equal(InboxStage.Cancelled, (await f.Read()).Inbox.Single(x => x.SourceMessageId == "long").Stage);
+        }
+        await f.Reopen();
+        Equal(0, (await f.Ledger.QueueAvailableInputWorkAsync(Identity)).Length);
+        Equal(operation, (await f.Read()).Operations.Single());
+        Equal(original, await f.Ledger.ReadConversationContextAsync(Identity));
+        var resume = new Model((request, _) =>
+        {
+            Check(request.Context.Any(e => e.Body.Contains("豆包")));
+            return Task.FromResult(ToolModelResponse.Reply("豆包"));
+        });
+        await using var next = f.Coordinator(resume);
+        await next.ActivateSessionAsync(Identity);
+        await next.AcceptAsync(Identity, "resume", "刚才猫叫什么", DateTimeOffset.UtcNow);
+        await Until(() => f.Sends.Count == 2);
+        Equal("豆包", f.Sends.Last().Message.Body);
     }
 
     private static async Task FastQuery()
@@ -451,8 +534,16 @@ internal static class DurableMessageCoordinatorTests
         Check(createdReply.Contains(threadId) && createdReply.Contains("任务已创建") && createdReply.Contains("请勿重复创建"));
         Check(!DurableMessageCoordinator.FailureReply(FailedCreation("unknown", operationId)).Single().Contains("任务已创建"));
         Check(!DurableMessageCoordinator.FailureReply(FailedCreation("accepted", Guid.NewGuid())).Single().Contains("任务已创建"));
+        var historyBudget = new ToolLoopResult(ToolLoopState.BudgetExceeded, null!,
+            [new("lookup", "search_history", "{}")], []);
+        string historyReply = DurableMessageCoordinator.FailureReply(historyBudget).Single();
+        Check(historyReply.Contains("记录还没查完") && historyReply.Contains("关键词")
+            && !historyReply.Contains("拆小") && !historyReply.Contains("工作列表"));
+        string operatedReply = DurableMessageCoordinator.FailureReply(historyBudget with
+        { Observations = [new("lookup", "search_history", "{}"), new("work", "send_to_task", "{}", OperationId: operationId)] }).Single();
+        Check(operatedReply.Contains("工作列表") && !operatedReply.Contains("关键词") && !operatedReply.Contains("重新回答"));
         foreach (var item in new[] { (ToolModelFailureKind.Authorization, "重新登录"),
-            (ToolModelFailureKind.UsageLimit, "额度"), (ToolModelFailureKind.InvalidOutput, "格式"), (ToolModelFailureKind.Timeout, "超时") })
+            (ToolModelFailureKind.UsageLimit, "额度"), (ToolModelFailureKind.InvalidOutput, "没生成好"), (ToolModelFailureKind.Timeout, "超时") })
         {
             await using var f = new Fixture();
             var model = new Model((_, _) => throw new ToolModelException(item.Item1, new IOException("PRIVATE_SERVER_DETAIL")));
@@ -487,6 +578,12 @@ internal static class DurableMessageCoordinatorTests
         await Task.Delay(60);
         Equal(0, afterRestart.Requests.Count);
         Equal(1, f.Sends.Count);
+        await next.AcceptAsync(Identity, "m2", "重新回答刚才的问题", DateTimeOffset.UtcNow);
+        await UntilAsync(() => Task.FromResult(f.Sends.Count == 2));
+        Equal(1, afterRestart.Requests.Count);
+        Check(afterRestart.Requests.Single().Context.Any(e => e.Source == ConversationSource.TrustedUser && e.Body == "do something"));
+        Check(afterRestart.Requests.Single().CurrentMessage.Body == "重新回答刚才的问题");
+        Equal(0, (await f.Read()).Operations.Length);
     }
 
     private static async Task BusyFastHandler()

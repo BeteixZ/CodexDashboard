@@ -39,6 +39,23 @@ internal static class AgentAdapterTests
         }
         try
         {
+            Check("new_dialogue_aliases_do_not_reset_topic_changes_or_quoted_requests",
+                DurableAssistantRuntime.IsNewDialogueCommand("开始新对话。")
+                && DurableAssistantRuntime.IsNewDialogueCommand("我们重新聊")
+                && !DurableAssistantRuntime.IsNewDialogueCommand("换个话题")
+                && !DurableAssistantRuntime.IsNewDialogueCommand("不要开始新对话")
+                && !DurableAssistantRuntime.IsNewDialogueCommand("他说开始新对话")
+                && !DurableAssistantRuntime.IsNewDialogueCommand("开始新对话是什么意思？"));
+            Check("stop_reply_commands_are_explicit_and_not_task_interrupts",
+                DurableAssistantRuntime.IsStopReplyCommand("先别回答了。")
+                && DurableAssistantRuntime.IsStopReplyCommand("停止回答")
+                && DurableAssistantRuntime.IsStopReplyCommand("别回了")
+                && DurableAssistantRuntime.IsStopReplyCommand("不用回答了。")
+                && !DurableAssistantRuntime.IsStopReplyCommand("她说别回了")
+                && !DurableAssistantRuntime.IsStopReplyCommand("不用回答了是什么意思")
+                && !DurableAssistantRuntime.IsStopReplyCommand("请解释停止回答是什么意思")
+                && !DurableAssistantRuntime.IsStopReplyCommand("停止任务")
+                && !DurableAssistantRuntime.IsStopReplyCommand("先停一下"));
             var protector = new WindowsStateProtector();
             var clear = Encoding.UTF8.GetBytes("SYNTHETIC_PRIVATE_DIALOGUE_请继续");
             var purpose = Encoding.UTF8.GetBytes("test-ledger-purpose");
@@ -174,6 +191,29 @@ internal static class AgentAdapterTests
             Check("ledger_file_contains_no_body", !Encoding.UTF8.GetString(File.ReadAllBytes(journal)).Contains("SYNTHETIC_SECRET_MESSAGE"));
 
             var reply = ChatGptAssistant.ParseToolResponse("""{"calls":[],"replies":["好，我在。"]}""");
+            var dateAnchor = new DateTimeOffset(2026, 10, 26, 13, 0, 0, TimeSpan.Zero);
+            var nextWednesday = RelativeDateContext.Read("下周三去复诊", dateAnchor, TimeZoneInfo.Utc).Single();
+            Check("next_week_is_not_upcoming_weekday", nextWednesday.Date == "2026-11-04" && nextWednesday.AnchorDate == "2026-10-26");
+            Check("relative_week_crosses_year", RelativeDateContext.Read("下星期一", new DateTimeOffset(2026, 12, 31, 0, 0, 0, TimeSpan.Zero), TimeZoneInfo.Utc).Single().Date == "2027-01-04");
+            var east = TimeZoneInfo.CreateCustomTimeZone("test-plus-eight", TimeSpan.FromHours(8), "test", "test");
+            Check("relative_week_uses_message_local_date", RelativeDateContext.Read("本周一", new DateTimeOffset(2026, 10, 25, 18, 0, 0, TimeSpan.Zero), east).Single().Date == "2026-10-26");
+            Check("double_week_offset", RelativeDateContext.Read("下下周三", dateAnchor, TimeZoneInfo.Utc).Single().Date == "2026-11-11");
+            Check("unsupported_relative_phrases_are_not_partially_parsed", RelativeDateContext.Read("下下下周三和周五", dateAnchor, TimeZoneInfo.Utc).Length == 0);
+            Check("relative_days_cross_month_from_original_anchor", RelativeDateContext.Read("明天和昨天", new DateTimeOffset(2026, 10, 31, 12, 0, 0, TimeSpan.Zero), TimeZoneInfo.Utc)
+                .Select(h => h.Date).SequenceEqual(new[] { "2026-11-01", "2026-10-30" }));
+            Check("relative_days_do_not_match_part_of_extended_day", RelativeDateContext.Read("大后天、大前天", dateAnchor, TimeZoneInfo.Utc)
+                .Select(h => h.Date).SequenceEqual(new[] { "2026-10-29", "2026-10-23" }));
+            Check("memory_save_denied_has_explicit_notice", ChatGptAssistant.MemorySaveNotice(
+                [new("m", "learn_preference", """{"status":"needs_confirmation"}""")])?.Contains("没能保存") == true);
+            Check("memory_save_unknown_does_not_claim_failure", ChatGptAssistant.MemorySaveNotice(
+                [new("m", "learn_preference", """{"status":"unknown"}""")])?.Contains("无法确认") == true);
+            Check("memory_save_success_has_no_failure_notice", ChatGptAssistant.MemorySaveNotice(
+                [new("m", "learn_preference", """{"status":"completed","facts":{"saved":[]}}""")]) == null);
+            Check("memory_save_mixed_outcomes_do_not_claim_all_failed", ChatGptAssistant.MemorySaveNotice(
+                [new("m", "learn_preference", """{"status":"needs_confirmation"}"""),
+                 new("n", "learn_preference", """{"status":"completed"}""")])?.Contains("既有成功也有失败") == true);
+            Check("other_tool_failure_does_not_claim_memory_failure", ChatGptAssistant.MemorySaveNotice(
+                [new("m", "search_history", """{"status":"rejected"}""")]) == null);
             var firstRound = ChatGptAssistant.ParseStructuredToolResponse("""{"calls":[{"id":"1","name":"list_tasks","argumentsJson":"{}"}],"replies":[]}""").Calls.Single();
             var secondRound = ChatGptAssistant.ParseStructuredToolResponse("""{"calls":[{"id":"1","name":"list_tasks","argumentsJson":"{\"hostId\":\"local\"}"}],"replies":[]}""").Calls.Single();
             await using (var ledger = await DurableConversationLedger.OpenAsync(new FileJournalStorage(Path.Combine(directory, "call-ids.state")), protector))
@@ -251,6 +291,11 @@ internal static class AgentAdapterTests
                     && !instructions.Contains("本次对话步骤没有执行工具"));
                 Check("native_functions_not_claimed_verified", !body.RootElement.TryGetProperty("tools", out _));
                 string input = body.RootElement.GetProperty("input").GetRawText();
+                var inputMessages = body.RootElement.GetProperty("input").EnumerateArray().ToArray();
+                Check("builtin_dialogue_skill_is_default_and_current_user_stays_last",
+                    inputMessages[^2].GetProperty("role").GetString() == "developer"
+                    && inputMessages[^2].GetProperty("content").GetString() == BuiltinDialogueSkill.Instructions
+                    && inputMessages[^1].GetProperty("role").GetString() == "user");
                 Check("persistent_context_and_current_source_in_prompt", input.Contains("current-message")
                     && input.Contains("historical-notification") && input.Contains("currentAuthorization"));
                 return new(HttpStatusCode.OK) { Content = new StringContent(sse, Encoding.UTF8, "text/event-stream") };

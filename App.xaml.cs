@@ -99,7 +99,9 @@ public partial class App : Application
             {
                 int index = Array.IndexOf(e.Args, "--smoke-test");
                 string directory = index + 1 < e.Args.Length ? e.Args[index + 1] : Path.Combine(AppContext.BaseDirectory, "smoke");
-                await RunSmokeTest(directory); ExitApplication(); return;
+                bool passed = await RunSmokeTest(directory);
+                await ExitApplicationAsync(passed ? 0 : 1);
+                return;
             }
             tray = new TrayService(this, vm, settings);
             string profile = dataIndex >= 0 ? TextSafety.Hash(Settings.DirectoryPath.ToUpperInvariant())[..24] : "default";
@@ -152,10 +154,10 @@ public partial class App : Application
     public void OpenWeb()
     {
         if (web == null || string.IsNullOrEmpty(web.LocalUrl)) { ShowSettings(); return; }
-        Process.Start(new ProcessStartInfo(web.LocalUrl + "/#token=" + Uri.EscapeDataString(settings.WebAccessKey)) { UseShellExecute = true });
+        Process.Start(new ProcessStartInfo(WebMonitorServer.AccessUrl(web.LocalUrl, settings.WebAccessKey)) { UseShellExecute = true });
     }
     public string WebConnectionAddress => web?.LanUrls.FirstOrDefault() ?? web?.LocalUrl ?? "";
-    public string WebShareLink => WebConnectionAddress.Length > 0 ? WebConnectionAddress + "/#token=" + settings.WebAccessKey : "";
+    public string WebShareLink => WebMonitorServer.AccessUrl(WebConnectionAddress, settings.WebAccessKey);
     private async Task ConfigureWeb()
     {
         if (web == null || Exiting) return;
@@ -239,7 +241,8 @@ public partial class App : Application
         }
         catch { }
     }
-    public async void ExitApplication()
+    public async void ExitApplication() => await ExitApplicationAsync(0);
+    private async Task ExitApplicationAsync(int exitCode)
     {
         if (Exiting && cleanedUp != 0) return;
         CleanupCore();
@@ -249,7 +252,7 @@ public partial class App : Application
             web = null;
         }
         if (status != null) { await status.DisposeAsync(); status = null; }
-        Shutdown();
+        Shutdown(exitCode);
     }
     protected override void OnExit(ExitEventArgs e)
     {
@@ -262,7 +265,7 @@ public partial class App : Application
         }
         base.OnExit(e);
     }
-    private async Task RunSmokeTest(string directory)
+    private async Task<bool> RunSmokeTest(string directory)
     {
         Directory.CreateDirectory(directory);
         settings.Notifications = false;
@@ -324,13 +327,15 @@ public partial class App : Application
         await vm.RefreshAsync();
         bool recovered = vm.Hosts.All(h => h.Error == null) && vm.AllTasks.All(t => !t.Disconnected) && recoveryNotifications == 0;
         settings.RemoteHosts = remotes;
-        File.WriteAllText(Path.Combine(directory, "smoke.json"), JsonSerializer.Serialize(new
+        var result = new
         {
             passed = through && restored && layered && search && fluentBackground && compactDimensions && miniHidesDesktopHud && compactRestoresHud && coloredDots && failureHandled && recovered && overviewVisible && reportTurnsMatch && liveHosts.All(h => h.Error == null) && webChecks.Values.All(v => v),
             clickThroughEnabled = through, clickThroughDisabled = restored, layeredPreserved = layered,
             searchFilter = search, fluentBackground, overviewVisible, compactDimensions, hudWidth, hudHeight, miniHidesDesktopHud, compactRestoresHud, coloredDots, webChecks, failureHandled, recovered, taskCount = liveTaskCount,
             hosts = liveHosts, statusCounts = liveStatuses, reportTurnsMatch
-        }, Settings.Json));
+        };
+        File.WriteAllText(Path.Combine(directory, "smoke.json"), JsonSerializer.Serialize(result, Settings.Json));
+        return result.passed;
     }
     private static void SaveImage(Window window, string path)
     {

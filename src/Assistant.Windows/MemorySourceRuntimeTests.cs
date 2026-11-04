@@ -59,9 +59,10 @@ internal static class MemorySourceRuntimeTests
             "记忆来源 " + desktop.Id + "；删除记忆 " + desktop.Id,
             "记忆来源 " + desktop.Id + "\n状态", "如果需要，记忆来源 " + desktop.Id
         ];
-        Check("only_exact_eight_hex_source_query_is_classified_readonly",
+        Check("source_id_and_keyword_queries_are_readonly_without_compound_commands",
             DurableAssistantRuntime.IsKnownReadonlyInput("记忆来源 " + desktop.Id)
             && DurableAssistantRuntime.IsKnownReadonlyInput("记忆来源 " + desktop.Id.ToLowerInvariant())
+            && DurableAssistantRuntime.IsKnownReadonlyInput("记忆来源 桌面来源")
             && malformed.All(text => !DurableAssistantRuntime.IsKnownReadonlyInput(text)));
         string reply = await InputAsync(f, "desktop-source", "记忆来源 " + desktop.Id.ToLowerInvariant());
         Check("desktop_source_query_reads_editor_provenance_without_invented_message",
@@ -70,6 +71,17 @@ internal static class MemorySourceRuntimeTests
             && !reply.Contains("消息编号：", StringComparison.Ordinal)
             && !reply.Contains("操作编号：", StringComparison.Ordinal)
             && (await f.ReadAsync()).Operations.IsEmpty && f.Model.Memory.Capture().Stamp == stamp);
+        reply = await InputAsync(f, "keyword-source", "记忆来源 桌面来源");
+        Check("unique_keyword_reads_provenance_without_model_or_write", reply.Contains(desktop.Id, StringComparison.Ordinal)
+            && reply.Contains("桌面记忆编辑器录入或纠正", StringComparison.Ordinal)
+            && (await f.ReadAsync()).Operations.IsEmpty && f.Model.Memory.Capture().Stamp == stamp);
+        reply = await InputAsync(f, "ambiguous-keyword-source", "记忆来源 来源偏好");
+        Check("ambiguous_keyword_shows_candidates_without_guessing_source", reply.Contains("找到多条记忆", StringComparison.Ordinal)
+            && reply.Contains(desktop.Text, StringComparison.Ordinal) && reply.Contains(legacy.Text, StringComparison.Ordinal)
+            && !reply.Contains("记录时间", StringComparison.Ordinal) && f.Model.Memory.Capture().Stamp == stamp);
+        reply = await InputAsync(f, "missing-keyword-source", "记忆来源 不存在的内容");
+        Check("missing_keyword_explains_how_to_find_memory", reply.Contains("没有找到", StringComparison.Ordinal)
+            && reply.Contains("查看记忆", StringComparison.Ordinal));
         reply = await InputAsync(f, "unknown-source", "记忆来源 " + legacy.Id);
         Check("legacy_entry_without_provenance_honestly_reports_unknown_source",
             reply.Contains("历史来源未记录", StringComparison.Ordinal)
@@ -106,13 +118,16 @@ internal static class MemorySourceRuntimeTests
             && f.Model.Memory.Capture().Stamp == stamp);
 
         f.Model.SetPersonalizationEnabled(false);
+        string disabledStamp = f.Model.Memory.Capture().Stamp;
         reply = await InputAsync(f, "disabled-source", "记忆来源 " + manual.Id);
         Check("disabled_personalization_does_not_expose_existing_source",
             reply.Contains("暂不读取记忆来源", StringComparison.Ordinal)
             && !reply.Contains(message.SourceMessageId, StringComparison.Ordinal)
             && !reply.Contains(operation.Id.ToString("D"), StringComparison.Ordinal)
-            && f.Model.Memory.Capture().Stamp == stamp && (await f.ReadAsync()).Operations.Length == 1);
+            && disabledStamp != stamp && f.Model.Memory.Capture().Stamp == disabledStamp
+            && (await f.ReadAsync()).Operations.Length == 1);
         f.Model.SetPersonalizationEnabled(true);
+        stamp = f.Model.Memory.Capture().Stamp;
         bool leaked = false;
         for (int i = 0; i < malformed.Length; i++)
         {

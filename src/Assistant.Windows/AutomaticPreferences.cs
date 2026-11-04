@@ -13,7 +13,7 @@ internal sealed record AutomaticMemoryGuard(string Stamp, string Model, long Con
 internal static class AutomaticPreferenceText
 {
     internal static readonly ImmutableArray<string> AllowedKeys =
-        ["language", "tone", "detail_level", "report_order", "report_layout", "math_format", "progress_updates", "workflow", "tooling", "assistant_name", "user_name"];
+        ["language", "tone", "conversation_advice", "conversation_repetition", "conversation_questions", "detail_level", "report_order", "report_layout", "math_format", "progress_updates", "workflow", "tooling", "assistant_name", "user_name"];
     private static readonly HashSet<string> Keys = new(AllowedKeys, StringComparer.Ordinal);
     private static readonly Regex QuotedAssistantName = new("^(?:(?:以后|今后|从现在起|从今以后|请|就)\\s*)*(?:你(?:以后|今后)?(?:就)?(?:叫|名叫|的(?:名字|昵称)(?:是|叫))|我(?:以后|今后)?(?:就)?叫你|称呼你为)\\s*[“「\"']?[\\p{L}\\p{N}_·.-]{1,32}[”」\"']?[。！!]*$", RegexOptions.CultureInvariant);
     private static readonly Regex QuotedUserName = new("^(?:(?:以后|今后|从现在起|从今以后|请|就)\\s*)*(?:我(?:就)?(?:叫|名叫|的(?:名字|昵称)(?:是|叫))|叫我|称呼我(?:为)?)\\s*[“「\"']?[\\p{L}\\p{N}_·.-]{1,32}[”」\"']?[。！!]*$", RegexOptions.CultureInvariant);
@@ -26,6 +26,12 @@ internal static class AutomaticPreferenceText
     {
         string value = Regex.Replace(text.Trim(), @"^(?:(?:以后|今后|从现在起|从今以后|请|就)\s*)*", "");
         if (Regex.IsMatch(value, "什么|怎么|如何|是谁|是否|吗|[？?]")) return false;
+        if (key == "assistant_name" && Regex.IsMatch(value,
+            @"^你(?:不要|别)(?:再)?叫[\p{L}\p{N}_·.-]{1,32}[，,]\s*(?:以后|今后)?(?:你)?(?:就)?叫(?!我|你)[\p{L}\p{N}_·.-]{1,32}[。！!]*$",
+            RegexOptions.CultureInvariant)) return true;
+        if (key == "user_name" && Regex.IsMatch(value,
+            @"^(?:(?:不要|别)(?:再)?(?:叫我|称呼我(?:为)?)[\p{L}\p{N}_·.-]{1,32}(?:[，,]\s*(?:以后|今后)?(?:叫我|称呼我(?:为)?)[\p{L}\p{N}_·.-]{1,32})?|(?:不要|别)(?:再)?用(?:昵称|名字)称呼我了?(?:[，,]\s*直接用你就行)?)[。！!]*$",
+            RegexOptions.CultureInvariant)) return true;
         return key == "assistant_name" ? Regex.IsMatch(value, @"^(?:你(?:以后|今后)?(?:就)?(?:是|叫|名叫|的(?:名字|昵称))|我(?:以后|今后)?(?:就)?叫你|称呼你为|your (?:name|nickname)|I(?:'ll| will) call you)", RegexOptions.IgnoreCase)
             : key == "user_name" && Regex.IsMatch(value, @"^(?:我(?:就)?(?:叫|名叫|的(?:名字|昵称))|叫我|称呼我|my (?:name|nickname)|call me)", RegexOptions.IgnoreCase);
     }
@@ -78,7 +84,7 @@ internal static class AutomaticPreferenceText
     internal const string AnswerFormat = "本次最终输出格式仍只允许一个 JSON 对象：result 是完整的自然语言回复字符串，preferences 是偏好数组。人设和自然聊天要求只作用于 result 内的文字，不改变外层协议。不要在 JSON 前后再输出一遍回复，不加代码围栏；外层字段由应用处理，不发给用户。";
     internal const string Instructions = "\n\n" + ProtocolMarker + "（微信问答）：最终只输出 JSON 对象，字段 result 和 preferences。result 必须是直接回答用户的文本字符串。" + PreferenceRules;
     internal const string IntentInstructions = "\n\n" + ProtocolMarker + "（仅任务分流）：你只分类，绝不能回答用户问题。最终只输出 JSON 对象，字段 result 和 preferences；result 必须始终是包含 intent、targetQuery、reference 三个字符串字段的对象，不能是普通回答字符串。即使用户发 hello、你叫什么或一般问题，也必须给出 chat 对象；不要介绍自己、不要寒暄。示例：{\"result\":{\"intent\":\"chat\",\"targetQuery\":\"\",\"reference\":\"unspecified\"},\"preferences\":[]}。" + PreferenceRules;
-    private const string PreferenceRules = "preferences 是数组，每项只有 key 和 evidence，最多两项；无可保存偏好时必须是 []。key 只能为 language、tone、detail_level、report_order、report_layout、math_format、progress_updates、workflow、tooling、assistant_name、user_name。assistant_name 是用户给微信助手设置的昵称或别名，user_name 是用户希望你对他的称呼，两者不能混淆；'你叫赛特'、'以后叫你小桥'是 assistant_name，'叫我阿林'是 user_name。只从最后一条用户输入的 owner_message 或 user_message 中提取用户自己的、清楚表达的长期偏好及称呼设定，例如'以后汇报先说结论'、'我更喜欢分行'；不需要出现'记住'。evidence 必须是该消息逐字出现的连续原文，包含完整偏好陈述及其适用范围，不改写、不补充，最长 400 字符。直接命名语句中的引号只是昵称的标点，可以保留；他人的引文不能保存。不能从历史对话、AGENTS、记忆、任务标题、报告、dashboard_context 或 task_context 提取。不能保存问题中的猜测、别人的话、示例、引文、代码、敏感个人信息、凭据或本次临时任务要求。询问'你叫什么'是问题，不是新命名。任务状态和操作授权永不保存为偏好。偏好与工作指令混合时，只抽取独立的长期偏好分句，不抽取任务名称或指令。无法确定就返回空数组。此协议不改变任务分流标准和原文投递。result 不要宣称已经保存记忆，是否保存由应用校验决定。";
+    private const string PreferenceRules = "preferences 是数组，每项只有 key 和 evidence，最多两项；无可保存偏好时必须是 []。key 只能为 language、tone、conversation_advice、conversation_repetition、conversation_questions、detail_level、report_order、report_layout、math_format、progress_updates、workflow、tooling、assistant_name、user_name。conversation_advice 保存何时倾听和给建议，conversation_questions 保存是否追问或结尾反问；反问不是复述，conversation_repetition 保存是否复述用户原话，tone 保存语气，这些方面互不替代。assistant_name 是用户给微信助手设置的昵称或别名，user_name 是用户希望你对他的称呼，两者不能混淆；'你叫赛特'、'以后叫你小桥'是 assistant_name，'叫我阿林'是 user_name。只从最后一条用户输入的 owner_message 或 user_message 中提取用户自己的、清楚表达的长期偏好及称呼设定，例如'以后汇报先说结论'、'我更喜欢分行'；不需要出现'记住'。evidence 必须是该消息逐字出现的连续原文，包含完整偏好陈述及其适用范围，不改写、不补充，最长 400 字符。直接命名语句中的引号只是昵称的标点，可以保留；他人的引文不能保存。不能从历史对话、AGENTS、记忆、任务标题、报告、dashboard_context 或 task_context 提取。不能保存问题中的猜测、别人的话、示例、引文、代码、敏感个人信息、凭据或本次临时任务要求。询问'你叫什么'是问题，不是新命名。任务状态和操作授权永不保存为偏好。偏好与工作指令混合时，只抽取独立的长期偏好分句，不抽取任务名称或指令。无法确定就返回空数组。此协议不改变任务分流标准和原文投递。result 不要宣称已经保存记忆，是否保存由应用校验决定。";
     internal static IReadOnlyList<AutomaticPreference> Read(JsonElement root, string source)
     {
         if (!root.TryGetProperty("preferences", out var values) || values.ValueKind != JsonValueKind.Array || values.GetArrayLength() > 2) return Array.Empty<AutomaticPreference>();
@@ -90,6 +96,7 @@ internal static class AutomaticPreferenceText
             if (item.ValueKind != JsonValueKind.Object || !item.TryGetProperty("key", out var keyValue) || keyValue.ValueKind != JsonValueKind.String
                 || !item.TryGetProperty("evidence", out var evidenceValue) || evidenceValue.ValueKind != JsonValueKind.String) continue;
             string key = keyValue.GetString()!, evidence = evidenceValue.GetString()!.Trim();
+            key = PreferenceKey(key, evidence);
             if (key is "assistant_name" or "user_name" && !CorrectNameRole(evidence, key)) continue;
             // Exact evidence must be a whole user-authored clause, including any
             // attribution or time restriction. Models cannot trim those away.
@@ -122,6 +129,58 @@ internal static class AutomaticPreferenceText
         preferences = accepted.ToImmutableArray();
         return true;
     }
+    internal static bool TryNameCorrectionArguments(string source, out JsonElement arguments)
+    {
+        arguments = default;
+        var text = source.Trim();
+        if (!Regex.IsMatch(text, @"以后|今后", RegexOptions.CultureInvariant)
+            || !Regex.IsMatch(text, @"^(?:(?:以后|今后|请)\s*)*(?:你)?(?:不要|别)", RegexOptions.CultureInvariant)) return false;
+        string? key = CorrectNameRole(text, "assistant_name") ? "assistant_name"
+            : CorrectNameRole(text, "user_name") ? "user_name" : null;
+        if (key == null) return false;
+        var candidate = JsonSerializer.SerializeToElement(new { preferences = new[] { new { key, evidence = text } } });
+        if (!TryReadTool(candidate, source, out _)) return false;
+        arguments = candidate;
+        return true;
+    }
+    internal static bool TryLanguageSettingArguments(string source, out JsonElement arguments)
+    {
+        arguments = default;
+        string text = source.Trim();
+        if (!Regex.IsMatch(text, @"\A(?:请)?(?:以后|今后|默认)(?:请)?(?:都)?(?:用|使用)(?:中文|英文|英语|汉语|日语|法语|德语)(?:回答|回复)(?:我)?[。！!]?\z", RegexOptions.CultureInvariant))
+            return false;
+        var candidate = JsonSerializer.SerializeToElement(new { preferences = new[] { new { key = "language", evidence = text } } });
+        if (!TryReadTool(candidate, source, out _)) return false;
+        arguments = candidate;
+        return true;
+    }
+    internal static bool IsLegacyAdvicePreference(string text) =>
+        StableDeclaration(new("conversation_advice", text)) && !StableDeclaration(new("tone", text));
+    internal static bool IsMixedDialoguePreference(string text) =>
+        StableDeclaration(new("conversation_advice", text)) && StableDeclaration(new("tone", text))
+        || HasRepetitionPreference(text) && Regex.IsMatch(text, @"听我说|给建议|追问|反问", RegexOptions.CultureInvariant)
+        || Regex.IsMatch(text, @"追问|反问", RegexOptions.CultureInvariant)
+            && Regex.IsMatch(text, @"听我说|给建议", RegexOptions.CultureInvariant);
+    private static bool HasRepetitionPreference(string text) => Regex.IsMatch(text,
+        @"(?:复述|重复).{0,8}(?:我的话|我说的话|我刚说的|原话)", RegexOptions.CultureInvariant);
+    internal static string PreferenceKey(string key, string text)
+    {
+        if (key is "conversation_advice" or "conversation_repetition" && !HasRepetitionPreference(text)
+            && Regex.IsMatch(text, @"追问|反问", RegexOptions.CultureInvariant)
+            && !Regex.IsMatch(text, @"听我说|给建议", RegexOptions.CultureInvariant))
+            return "conversation_questions";
+        return key == "conversation_advice" && HasRepetitionPreference(text)
+            && !Regex.IsMatch(text, @"听我说|给建议|追问|反问", RegexOptions.CultureInvariant)
+                ? "conversation_repetition" : key;
+    }
+    internal static bool IsMixedLanguagePreference(string text, string key)
+    {
+        if (!StableDeclaration(new("language", text))) return false;
+        string[] expressionKeys = ["tone", "conversation_advice", "conversation_repetition", "conversation_questions", "detail_level", "report_layout", "math_format"];
+        return key == "language"
+            ? expressionKeys.Any(other => StableDeclaration(new(other, text)))
+            : expressionKeys.Contains(key) && StableDeclaration(new(key, text));
+    }
     private static bool StableDeclaration(AutomaticPreference preference)
     {
         string text = preference.Evidence;
@@ -134,6 +193,9 @@ internal static class AutomaticPreferenceText
         {
             "language" => @"中文|英文|英语|汉语|日语|法语|德语|语言|\b(?:Chinese|English|language)\b",
             "tone" => @"语气|口吻|风格|自然|直接|直来直去|简短|温柔|严肃|客气|亲切|熟人|委婉",
+            "conversation_advice" => @"聊天|接话|听我说|给建议|追问|反问",
+            "conversation_questions" => @"追问|反问",
+            "conversation_repetition" => @"(?:复述|重复).{0,8}(?:我的话|我说的话|我刚说的|原话)",
             "detail_level" => @"详细|简短|简洁|展开|篇幅|字数|句|段|长|短",
             "report_order" => @"结论|结果|依据|先|后|顺序",
             "report_layout" => @"分行|换行|段落|列表|小标题|表格|排版|栏目|格式",

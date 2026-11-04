@@ -73,6 +73,9 @@ try {
     Invoke-Check -Name 'backup-integrity' -Executable 'pwsh' -Arguments @('-NoLogo', '-NoProfile', '-File', (Join-Path $repository 'tests/AssistantBackupIntegrity.Tests.ps1'), '-OutputDirectory', (Join-Path $output 'backup-integrity'))
     Invoke-Check -Name 'dashboard-build' -Executable 'dotnet' -Arguments @('build', (Join-Path $repository 'CodexDashboard.csproj'), '-c', $Configuration, '-m:1', '-nr:false', '--nologo')
     Invoke-Check -Name 'assistant-build' -Executable 'dotnet' -Arguments @('build', (Join-Path $repository 'src/Assistant.Windows/Assistant.Windows.csproj'), '-c', $Configuration, '-m:1', '-nr:false', '--nologo')
+    $assistantAssembly = Join-Path $repository "src/Assistant.Windows/bin/$Configuration/net10.0-windows/CodexAssistant.dll"
+    Invoke-Check -Name 'assistant-input-merge' -Executable 'dotnet' -Arguments @($assistantAssembly, '--input-merge-boundary-test', (Join-Path $output 'assistant-input-merge'))
+    Invoke-Check -Name 'assistant-dependency-recovery' -Executable 'dotnet' -Arguments @($assistantAssembly, '--dependency-recovery-test', (Join-Path $output 'assistant-dependency-recovery'))
     [ordered]@{ syntheticOnly = $true; completed = $true; passed = $true; startedAt = $started; completedAt = [DateTimeOffset]::UtcNow; checks = @($results.ToArray()) } |
         ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $output 'summary.json') -Encoding utf8
     Write-Host "All isolated project checks passed. Evidence: $output"

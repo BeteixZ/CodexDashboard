@@ -279,6 +279,13 @@ internal static class OwnedControlAdapterTests
                 restoredTask = f.Runtime.Tasks().Single();
                 var resumeCall = WriteCall("resume_owned_task", restoredTask);
                 Check("query does not authorize restored control", !(await f.AuthorizeAsync(await f.ReceiveAsync("查询 " + threadId, resumeCall))).Allowed);
+                var selected = await f.ReceiveAsync("选择当前测试任务", resumeCall);
+                await f.Ledger.SetWorkFocusAsync(f.Identity, selected.Message.SourceMessageId,
+                    new TaskReference(restoredTask.Handle.Identity.HostId, threadId, ProfileId: restoredTask.Handle.Identity.ProfileId),
+                    selected.Message.Body);
+                foreach (string prefix in new[] { "请", "帮我", "麻烦" })
+                    Check("polite current-task restore retains canonical focus " + prefix,
+                        (await f.AuthorizeAsync(await f.ReceiveAsync(prefix + "恢复当前任务控制", resumeCall))).Allowed);
                 var resumed = await f.ExecuteAsync("恢复控制 " + threadId, resumeCall);
                 Check("explicit resume promotes only exact restored task", resumed.Result.State == ToolExecutionState.Accepted
                     && f.Runtime.Tasks().Single().Handle.Access == OwnedTaskAccess.ResumedThisSession
@@ -510,6 +517,10 @@ internal static class OwnedControlAdapterTests
                 new { path = "result.cs", kind = new { type = "update" }, diff = "secret-diff" } } })));
         var first = await f.ReadAsync("read_owned_report", new { configurationId = "demo", threadId = thread, turnId = turn, pageSize = 256 });
         string token = first.Facts.GetProperty("page").GetProperty("snapshotId").GetString()!;
+        check("report command projection does not claim complete execution evidence",
+            !first.Facts.GetProperty("commandItemsCoverAllExecution").GetBoolean()
+            && !first.Facts.GetProperty("emptyCommandItemsProveNoExecution").GetBoolean()
+            && first.Facts.GetProperty("executionEvidenceScope").GetString()!.Contains("exec"));
         int count = first.Facts.GetProperty("page").GetProperty("totalPages").GetInt32(), reads = f.Rpc.Calls.Count;
         check("report page carries exact turn and immutable snapshot metadata", first.Facts.GetProperty("TurnId").GetString() == turn
             && first.Facts.GetProperty("page").GetProperty("consistentSnapshot").GetBoolean() && first.Facts.GetProperty("truncated").GetBoolean()
@@ -556,6 +567,12 @@ internal static class OwnedControlAdapterTests
         for (int i = 0; i < 8; i++) await f.ReadAsync("list_owned_tasks", new { });
         var evicted = await f.ReadAsync("read_owned_report", new { configurationId = "demo", threadId = thread, turnId = turn, snapshotId = limitedToken });
         check("bounded snapshot cache eviction fails closed", evicted.State == ToolExecutionState.Rejected);
+        f.Rpc.Threads[thread] = Rpc.Thread(thread, task.Snapshot.Cwd, Rpc.Turn("empty-command-turn", "completed",
+            J(new { type = "agentMessage", phase = "final_answer", text = "only projected final answer" })));
+        var withoutCommands = await f.ReadAsync("read_owned_report", new { configurationId = "demo", threadId = thread, turnId = "empty-command-turn" });
+        check("empty projected command list is not evidence of no execution",
+            withoutCommands.Facts.GetProperty("totalCommandItems").GetInt32() == 0
+            && !withoutCommands.Facts.GetProperty("emptyCommandItemsProveNoExecution").GetBoolean());
     }
 
     private static async Task PersistedFocusAsync(string directory, Action<string, bool> check)
@@ -594,6 +611,17 @@ internal static class OwnedControlAdapterTests
             WriteCall("continue_owned_task", task, focusedInstruction)));
         check("focused continuation cannot change instruction", !await Allowed(focusedInstruction,
             WriteCall("continue_owned_task", task, "执行其他内容")));
+        foreach (string prefix in new[] { "请", "帮我", "麻烦" })
+        {
+            string polite = prefix + focusedInstruction;
+            check("polite current-task continuation preserves exact instruction " + prefix,
+                await Allowed(polite, WriteCall("continue_owned_task", task, polite)));
+            check("polite continuation cannot drop original prefix " + prefix,
+                !await Allowed(polite, WriteCall("continue_owned_task", task, focusedInstruction)));
+            string negated = prefix + "不要继续当前任务";
+            check("polite negation remains denied " + prefix,
+                !await Allowed(negated, WriteCall("continue_owned_task", task, negated)));
+        }
         foreach (string body in new[] { "继续另一个任务", "继续其他任务", "不要继续测试", "如果通过就继续测试", "继续测试其他项目" })
             check("focus continuation rejects " + body, !await Allowed(body, WriteCall("continue_owned_task", task, body)));
         var continued = await f.ExecuteAsync("继续测试", WriteCall("continue_owned_task", task, "继续测试"));
@@ -602,6 +630,8 @@ internal static class OwnedControlAdapterTests
         await WaitStage(f, continued.Operation.Id, OperationStage.Running);
         foreach (string body in new[] { "先停一下", "停止运行", "中断当前任务", "停止当前任务" })
             check("exact focus stop accepts " + body, await Allowed(body, Stop()));
+        foreach (string body in new[] { "请停止当前任务", "帮我中断当前任务", "麻烦停止当前任务" })
+            check("polite focus stop accepts " + body, await Allowed(body, Stop()));
         check("explicit current task cannot bypass exact active turn", !await Allowed("中断当前任务", Stop("old-turn")));
         foreach (string body in new[] { "停止另一个任务", "停止其他任务", "不要停止当前任务", "如果通过就停止当前任务", "先停一下别的任务" })
             check("focus stop rejects " + body, !await Allowed(body, Stop()));

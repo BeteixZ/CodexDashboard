@@ -27,7 +27,10 @@ internal static class ConversationHistoryRuntimeTests
         }
         try
         {
+            await AnchoredSearchAsync(Path.Combine(directory, "anchored-search"), Check);
             await LookupAsync(Path.Combine(directory, "lookup"), Check);
+            await RelativeDatesAsync(Path.Combine(directory, "relative-dates"), Check);
+            await UnmatchedQueryAsync(Path.Combine(directory, "unmatched-query"), Check);
             await LargeSearchAsync(Path.Combine(directory, "large-search"), Check);
             await LargeSummariesAsync(Path.Combine(directory, "large-summaries"), Check);
             await RevocationAsync(Path.Combine(directory, "revocation"), Check);
@@ -38,6 +41,120 @@ internal static class ConversationHistoryRuntimeTests
             File.WriteAllText(Path.Combine(directory, "failure.txt"), error.ToString()); exit(1);
         }
         return true;
+    }
+
+    private static async Task AnchoredSearchAsync(string directory, Action<string, bool> check)
+    {
+        await using var f = await DurableRuntimeTests.Fixture.CreateAsync(directory);
+        await f.Ledger.AppendContextAsync(f.Runtime.Identity!, ConversationSource.Report, "原稿锚点", DateTimeOffset.UtcNow);
+        for (int i = 0; i < 13; i++)
+            await f.Ledger.AppendContextAsync(f.Runtime.Identity!, ConversationSource.Report, "后续修改" + i, DateTimeOffset.UtcNow);
+        JsonElement following = default, next = default;
+        bool first = false, last = false, scope = false;
+        f.Script.Handler = (request, ct) =>
+        {
+            if (request.Observations.IsEmpty)
+                return Task.FromResult(ToolModelResponse.Call(Call("anchor", "search_history", new { query = "原稿锚点" })));
+            using var result = JsonDocument.Parse(request.Observations.Last().ResultJson);
+            var root = result.RootElement;
+            if (request.Observations.Length == 1)
+            {
+                following = root.GetProperty("facts").GetProperty("followingPages")[0].GetProperty("arguments").Clone();
+                return Task.FromResult(ToolModelResponse.Call(Call("following", "search_history", following)));
+            }
+            if (request.Observations.Length == 2)
+            {
+                var facts = root.GetProperty("facts");
+                var records = facts.GetProperty("records");
+                next = facts.GetProperty("nextPageArguments").Clone();
+                first = records.GetArrayLength() == 10 && records[0].GetProperty("text").GetString() == "后续修改0"
+                    && records[9].GetProperty("text").GetString() == "后续修改9"
+                    && next.GetProperty("afterEventId").GetString() == following.GetProperty("afterEventId").GetString();
+                return Task.FromResult(ToolModelResponse.Call(Call("following-page", "search_history", next)));
+            }
+            if (request.Observations.Length == 3)
+            {
+                var facts = root.GetProperty("facts");
+                last = facts.GetProperty("records").GetArrayLength() == 3
+                    && facts.GetProperty("records")[0].GetProperty("text").GetString() == "后续修改10"
+                    && facts.GetProperty("nextOffset").ValueKind == JsonValueKind.Null;
+                return Task.FromResult(ToolModelResponse.Call(Call("outside-scope", "search_history", new {
+                    query = "", afterEventId = following.GetProperty("afterEventId").GetString(), hostId = "other", threadId = "other" })));
+            }
+            scope = root.GetProperty("facts").GetProperty("code").GetString() == "history_anchor_unavailable";
+            return Task.FromResult(ToolModelResponse.Reply("检查完成。"));
+        };
+        await f.InputAsync("anchor-search", "读取原稿后面的修改"); await Settled(f, "anchor-search");
+        File.WriteAllText(Path.Combine(directory, "anchor-observations.json"), JsonSerializer.Serialize((await f.ReadAsync()).ToolInvocations.Select(i => new { i.ToolName, i.ArgumentsJson, i.ResultJson }), Settings.Json));
+        check("anchored_history_reads_following_records_in_ledger_order_and_preserves_anchor_on_page", first && last);
+        check("anchored_history_cannot_escape_requested_scope", scope);
+    }
+    private static async Task UnmatchedQueryAsync(string directory, Action<string, bool> check)
+    {
+        await using var f = await DurableRuntimeTests.Fixture.CreateAsync(directory);
+        await f.Ledger.AppendContextAsync(f.Runtime.Identity!, ConversationSource.Report, "周日下午去河边。", DateTimeOffset.UtcNow);
+        for (int i = 0; i < 11; i++)
+            await f.Ledger.AppendContextAsync(f.Runtime.Identity!, ConversationSource.Report, "无关收据" + i, DateTimeOffset.UtcNow);
+        bool hint = false, paging = false, scoped = false;
+        f.Script.Handler = (request, ct) =>
+        {
+            if (request.Observations.IsEmpty)
+                return Task.FromResult(ToolModelResponse.Call(Call("miss", "search_history", new { query = "出游" })));
+            using var result = JsonDocument.Parse(request.Observations.Last().ResultJson);
+            var facts = result.RootElement.GetProperty("facts");
+            if (request.Observations.Length == 1)
+            {
+                hint = facts.GetProperty("total").GetInt32() == 0
+                    && facts.GetProperty("availableInScope").GetInt32() > 0
+                    && facts.GetProperty("broaderSearchArguments").GetProperty("query").GetString() == ""
+                    && facts.GetProperty("broaderSearchArguments").GetProperty("offset").GetInt32() == 0
+                    && facts.GetProperty("searchHint").GetString()!.Contains("query留空");
+                return Task.FromResult(ToolModelResponse.Call(Call("browse", "search_history", new { query = "", offset = 0 })));
+            }
+            if (request.Observations.Length == 2)
+            {
+                paging = facts.GetProperty("nextOffset").GetInt32() > 0
+                    && facts.GetProperty("nextPageArguments").GetProperty("offset").GetInt32() == facts.GetProperty("nextOffset").GetInt32()
+                    && facts.GetProperty("nextPageArguments").GetProperty("query").GetString() == ""
+                    && facts.GetProperty("searchHint").GetString()!.Contains("实际调用后再回答");
+                return Task.FromResult(ToolModelResponse.Call(Call("other-scope", "search_history",
+                    new { query = "出游", hostId = "missing-host", threadId = "missing-thread" })));
+            }
+            scoped = facts.GetProperty("availableInScope").GetInt32() == 0
+                && facts.GetProperty("broaderSearchArguments").ValueKind == JsonValueKind.Null
+                && facts.GetProperty("searchHint").ValueKind == JsonValueKind.Null;
+            return Task.FromResult(ToolModelResponse.Reply("查找结束。"));
+        };
+        await f.InputAsync("miss-query", "找以前的出游记录"); await Settled(f, "miss-query");
+        check("unmatched_query_distinguishes_saved_history_without_widening_scope", hint && paging && scoped);
+    }
+
+    private static async Task RelativeDatesAsync(string directory, Action<string, bool> check)
+    {
+        await using var f = await DurableRuntimeTests.Fixture.CreateAsync(directory);
+        var old = new DateTimeOffset(2026, 2, 28, 12, 0, 0, TimeSpan.Zero);
+        await f.Ledger.ReceiveAsync(f.Runtime.Identity!, "old-plan", "明天去图书馆", MessageTrust.AuthenticatedUser, old);
+        await f.Ledger.AppendContextAsync(f.Runtime.Identity!, ConversationSource.Report, "明天去图书馆", old);
+        await f.InputAsync("reset", "新对话"); await Settled(f, "reset");
+        bool userAnchored = false, assistantNotInterpreted = false;
+        f.Script.Handler = (request, _) =>
+        {
+            if (request.Observations.IsEmpty)
+                return Task.FromResult(ToolModelResponse.Call(Call("find-old", "search_history", new { query = "图书馆" })));
+            using var result = JsonDocument.Parse(request.Observations.Last().ResultJson);
+            File.WriteAllText(Path.Combine(directory, "relative-date-observation.json"), request.Observations.Last().ResultJson);
+            var rows = result.RootElement.GetProperty("facts").GetProperty("records").EnumerateArray().ToArray();
+            var user = rows.Single(r => r.GetProperty("evidence").GetString() == "user_statement");
+            var assistant = rows.Single(r => r.GetProperty("evidence").GetString() == "task_report");
+            userAnchored = user.GetProperty("relativeDateInterpretations")[0].GetProperty("Date").GetString()
+                == TimeZoneInfo.ConvertTime(old, TimeZoneInfo.Local).Date.AddDays(1).ToString("yyyy-MM-dd")
+                && user.GetProperty("text").GetString() == "明天去图书馆";
+            assistantNotInterpreted = assistant.GetProperty("relativeDateInterpretations").ValueKind == JsonValueKind.Null;
+            return Task.FromResult(ToolModelResponse.Reply("已找到原安排。"));
+        };
+        await f.InputAsync("find", "查找以前的图书馆安排"); await Settled(f, "find");
+        check("old_relative_day_uses_original_message_and_preserves_text", userAnchored);
+        check("report_history_does_not_gain_user_date_interpretation", assistantNotInterpreted);
     }
 
     private static async Task LargeSummariesAsync(string directory, Action<string, bool> check)

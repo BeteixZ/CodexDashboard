@@ -34,23 +34,37 @@ foreach($product in @(@{Folder='dashboard';Name='CodexDashboard'},@{Folder='assi
     $name="$($product.Name)-SetupTest-$testId"
     $appId="BeteixZ.$name"
     $program=Join-Path $root "$($product.Folder)/program"
-    $data=Join-Path $root "$($product.Folder)/data"
+    $data=Join-Path $root "$($product.Folder)/profile/data"
     $compilerOutput=Join-Path $root "$($product.Folder)/compiler"
+    $shortcutDirectory=Join-Path $root "$($product.Folder)/shortcuts"
     [void][IO.Directory]::CreateDirectory($data)
     $sentinel=Join-Path $data 'synthetic-data.txt'
     'SYNTHETIC_INSTALLER_DATA' | Set-Content -LiteralPath $sentinel
     $sentinelHash=(Get-FileHash -LiteralPath $sentinel).Hash
     Check "$($product.Name) unique registration does not exist" (!(Test-Registration $appId))
-    & $InnoCompilerPath /Qp "/DProductName=$name" "/DProductExe=$($product.Name).exe" "/DProductAppId=$appId" "/DProductVersion=$Version" "/DPackageDirectory=$([IO.Path]::GetFullPath((Join-Path $PackageDirectory $product.Folder)))" "/DReleaseDirectory=$compilerOutput" "/DProductDataDirectory=$data" (Join-Path $PSScriptRoot '../packaging/windows-products.iss')
+    & $InnoCompilerPath /Qp "/DProductName=$name" "/DProductExe=$($product.Name).exe" "/DProductAppId=$appId" "/DProductVersion=$Version" "/DPackageDirectory=$([IO.Path]::GetFullPath((Join-Path $PackageDirectory $product.Folder)))" "/DReleaseDirectory=$compilerOutput" "/DProductDataDirectory=$data" "/DProductShortcutDirectory=$shortcutDirectory" (Join-Path $PSScriptRoot '../packaging/windows-products.iss')
     if ($LASTEXITCODE -ne 0) { throw 'Could not compile isolated test installer.' }
     $setup=Join-Path $compilerOutput "$name-$Version-win-x64-Setup.exe"
     $installArgs=@('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/SP-',('"/DIR='+$program+'"'))
-    $shortcutPath=Join-Path ([Environment]::GetFolderPath('Programs')) "$name/$name.lnk"
-    $noIconsProgram=Join-Path $root "$($product.Folder)/noicons-program"
+    $shortcutPath=Join-Path $shortcutDirectory "$name.lnk"
+    foreach ($overlap in @(
+        @{Label='equal';Path=$data.ToUpperInvariant()},
+        @{Label='inside-data';Path=(Join-Path $data 'nested-program')},
+        @{Label='above-data';Path=(Split-Path -Parent $data)}
+    )) {
+        $log=Join-Path $root "$($product.Folder)-overlap-$($overlap.Label).log"
+        $exitCode=Run-Installer $setup @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/SP-','/NOICONS','/LANG=english',('"/DIR='+$overlap.Path+'"'),('"/LOG='+$log+'"'))
+        Check "$($product.Name) rejects overlapping program folder ($($overlap.Label)) before writing" (
+            $exitCode -ne 0 -and !(Test-Registration $appId) -and
+            !(Test-Path -LiteralPath (Join-Path $overlap.Path 'releases')) -and
+            (Get-FileHash -LiteralPath $sentinel).Hash -eq $sentinelHash -and
+            (Get-Content -LiteralPath $log -Raw).Contains('Choose a program folder that is separate from the data folder'))
+    }
+    $noIconsProgram="$data-program"
     $noIconsArgs=@('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/SP-','/NOICONS',('"/DIR='+$noIconsProgram+'"'),('"/LOG='+(Join-Path $root "$($product.Folder)-noicons.log")+'"'))
     $exitCode=Run-Installer $setup $noIconsArgs
     Check "$($product.Name) NOICONS setup installs with isolated registration" ($exitCode -eq 0 -and (Test-Registration $appId))
-    Check "$($product.Name) NOICONS suppresses the unique test start-menu shortcut" (!(Test-Path -LiteralPath $shortcutPath))
+    Check "$($product.Name) NOICONS suppresses the isolated test shortcut" (!(Test-Path -LiteralPath $shortcutDirectory))
     $exitCode=Run-Installer (Join-Path $noIconsProgram 'uninstall/unins000.exe') @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART')
     Check "$($product.Name) NOICONS trial uninstalls and retains configured data" ($exitCode -eq 0 -and !(Test-Registration $appId) -and (Get-FileHash -LiteralPath $sentinel).Hash -eq $sentinelHash)
     $exitCode=Run-Installer $setup ($installArgs+('"/LOG='+(Join-Path $root "$($product.Folder)-install.log")+'"'))
@@ -59,6 +73,15 @@ foreach($product in @(@{Folder='dashboard';Name='CodexDashboard'},@{Folder='assi
     Check "$($product.Name) install has one fresh release" ($firstRelease.Count -eq 1)
     $oldExe=Join-Path $firstRelease[0].FullName "$($product.Name).exe"
     $oldHash=(Get-FileHash -LiteralPath $oldExe).Hash
+    $relocated=Join-Path $root "$($product.Folder)/relocated-program"
+    $relocationLog=Join-Path $root "$($product.Folder)-relocation.log"
+    $registrationPath="HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\${appId}_is1"
+    $exitCode=Run-Installer $setup @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/SP-','/NOICONS','/LANG=english',('"/DIR='+$relocated+'"'),('"/LOG='+$relocationLog+'"'))
+    Check "$($product.Name) refuses relocated upgrade and retains original uninstall registration and payload" (
+        $exitCode -ne 0 -and !(Test-Path -LiteralPath $relocated) -and
+        (Get-ItemPropertyValue -LiteralPath $registrationPath -Name 'Inno Setup: App Path') -eq $program -and
+        (Get-FileHash -LiteralPath $oldExe).Hash -eq $oldHash -and
+        (Get-Content -LiteralPath $relocationLog -Raw).Contains('Install this upgrade in the existing program folder'))
     $upgradeHeld=[IO.FileStream]::new($oldExe,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
     try {
         $exitCode=Run-Installer $setup ($installArgs+('"/LOG='+(Join-Path $root "$($product.Folder)-upgrade.log")+'"'))

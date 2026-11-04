@@ -138,6 +138,11 @@ internal sealed class AutomaticPreferenceTools
         public async Task<ToolModelResponse> GenerateAsync(ToolModelRequest request, CancellationToken ct)
         {
             await owner.CaptureBeforeGenerationAsync(request, ct);
+            if (owner.LearningAvailable && request.DeferredWork == null && request.Observations.IsEmpty
+                && request.Tools.Any(tool => tool.Name == "learn_preference")
+                && (AutomaticPreferenceText.TryNameCorrectionArguments(request.CurrentMessage.Body, out var arguments)
+                    || AutomaticPreferenceText.TryLanguageSettingArguments(request.CurrentMessage.Body, out arguments)))
+                return ToolModelResponse.Call(new ModelToolCall("explicit-preference-setting", "learn_preference", arguments.GetRawText()));
             return await inner.GenerateAsync(request, ct);
         }
     }

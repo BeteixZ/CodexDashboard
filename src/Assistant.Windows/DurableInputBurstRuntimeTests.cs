@@ -59,6 +59,32 @@ internal static class DurableInputBurstRuntimeTests
         await ConfiguredMergeAsync(Path.Combine(directory, "configured-merge"), Check);
         await DisabledMergeAsync(Path.Combine(directory, "disabled-merge"), Check);
         await LiveMergeSettingsAsync(Path.Combine(directory, "live-merge"), Check);
+        await NaturalReplyStopAsync(Path.Combine(directory, "natural-reply-stop"), Check);
+    }
+    private static async Task NaturalReplyStopAsync(string directory, Action<string, bool> check)
+    {
+        await using var f = await DurableRuntimeTests.Fixture.CreateAsync(directory);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource<ToolModelResponse>(TaskCreationOptions.RunContinuationsAsynchronously);
+        f.Script.Handler = (_, _) => { entered.TrySetResult(); return release.Task; };
+        await f.InputAsync("remember-topic", "我的猫叫豆包，慢慢讲怎么照顾它");
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        await f.InputAsync("stop-chat", "别回了");
+        await OwnedHostRuntimeTests.WaitReplyAsync(f, "stop-chat");
+        check("natural_stop_replies_without_waiting_for_model", !release.Task.IsCompleted
+            && f.Sent.Last() == "好，先不继续回答了。");
+        release.TrySetResult(ToolModelResponse.Reply("late answer must not send"));
+        f.Script.Handler = (request, _) =>
+        {
+            check("stopped_question_remains_available_for_followup", request.Context.Any(e => e.Body.Contains("猫叫豆包")));
+            return Task.FromResult(ToolModelResponse.Reply("豆包。"));
+        };
+        await f.InputAsync("followup", "刚才我说猫叫什么？");
+        await OwnedHostRuntimeTests.WaitReplyAsync(f, "followup");
+        var state = await f.ReadAsync();
+        check("late_answer_stays_cancelled_and_context_followup_succeeds", !f.Sent.Contains("late answer must not send")
+            && f.Sent.Last() == "豆包。" && state.Operations.IsEmpty
+            && state.Inbox.Single(i => i.SourceMessageId == WeChatText.Hash("remember-topic")).Stage == InboxStage.Cancelled);
     }
     private static void CheckMergeSettings(Action<string, bool> check)
     {

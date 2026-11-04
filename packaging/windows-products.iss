@@ -20,6 +20,9 @@
 #ifndef ProductDataDirectory
   #define ProductDataDirectory "{localappdata}\" + ProductName + "Installed"
 #endif
+#ifndef ProductShortcutDirectory
+  #define ProductShortcutDirectory "{group}"
+#endif
 
 [Setup]
 AppId={#ProductAppId}
@@ -58,26 +61,78 @@ VersionInfoProductName={#ProductName}
 VersionInfoProductVersion={#ProductVersion}
 
 [Languages]
+Name: "chinesesimplified"; MessagesFile: "languages\ChineseSimplified.isl"
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
+[CustomMessages]
+english.ExitBeforeUninstall=Please exit %1 before uninstalling. Your records and settings will be retained.
+chinesesimplified.ExitBeforeUninstall=请先退出 %1，然后重试卸载。记录与设置将保留。
+english.KeepInstallationDirectory=Install this upgrade in the existing program folder (%1). To change folders, uninstall the existing version first. Your records and settings will be retained.
+chinesesimplified.KeepInstallationDirectory=请在现有程序目录（%1）中升级。如需更换目录，请先卸载现有版本。记录与设置将保留。
+english.SeparateDataDirectory=Choose a program folder that is separate from the data folder (%1). Neither folder may contain the other.
+chinesesimplified.SeparateDataDirectory=请选择与数据目录（%1）分开的程序目录。两个目录不能相同或互相包含。
+
 [Tasks]
-Name: "desktopicon"; Description: "Create a desktop shortcut / 创建桌面快捷方式"; Flags: unchecked
+Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; Flags: unchecked
 
 [Files]
 Source: "{#PackageDirectory}\*"; DestDir: "{code:GetReleaseDirectory}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "languages\LICENSE.txt"; DestDir: "{code:GetReleaseDirectory}\licenses"; DestName: "Inno-Chinese-Translation.txt"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\{#ProductName}"; Filename: "{code:GetReleaseDirectory}\{#ProductExe}"; Parameters: "--data-dir ""{#ProductDataDirectory}"" --protocol-profile installed"; WorkingDir: "{code:GetReleaseDirectory}"; Check: not WizardNoIcons
+Name: "{#ProductShortcutDirectory}\{#ProductName}"; Filename: "{code:GetReleaseDirectory}\{#ProductExe}"; Parameters: "--data-dir ""{#ProductDataDirectory}"" --protocol-profile installed"; WorkingDir: "{code:GetReleaseDirectory}"; Check: not WizardNoIcons
 Name: "{autodesktop}\{#ProductName}"; Filename: "{code:GetReleaseDirectory}\{#ProductExe}"; Parameters: "--data-dir ""{#ProductDataDirectory}"" --protocol-profile installed"; WorkingDir: "{code:GetReleaseDirectory}"; Tasks: desktopicon
-Name: "{group}\Uninstall {#ProductName}"; Filename: "{uninstallexe}"; Check: not WizardNoIcons
+Name: "{#ProductShortcutDirectory}\{cm:UninstallProgram,{#ProductName}}"; Filename: "{uninstallexe}"; Check: not WizardNoIcons
 
 [Run]
-Filename: "{code:GetReleaseDirectory}\{#ProductExe}"; Parameters: "--data-dir ""{#ProductDataDirectory}"" --protocol-profile installed"; WorkingDir: "{code:GetReleaseDirectory}"; Description: "Launch {#ProductName} / 启动程序"; Flags: nowait postinstall skipifsilent unchecked
+Filename: "{code:GetReleaseDirectory}\{#ProductExe}"; Parameters: "--data-dir ""{#ProductDataDirectory}"" --protocol-profile installed"; WorkingDir: "{code:GetReleaseDirectory}"; Description: "{cm:LaunchProgram,{#ProductName}}"; Flags: nowait postinstall skipifsilent unchecked
 
 [Code]
 var
   ReleaseDirectory: String;
   ReleaseRoot: String;
+
+function ValidateInstallationDirectory: String;
+var
+  ProgramPath, DataPath, PreviousPath: String;
+begin
+  Result := '';
+  ProgramPath := AddBackslash(ExpandFileName(WizardDirValue));
+  DataPath := AddBackslash(ExpandFileName(ExpandConstant('{#ProductDataDirectory}')));
+  if (CompareText(Copy(ProgramPath, 1, Length(DataPath)), DataPath) = 0) or
+     (CompareText(Copy(DataPath, 1, Length(ProgramPath)), ProgramPath) = 0) then
+  begin
+    Result := FmtMessage(CustomMessage('SeparateDataDirectory'), [DataPath]);
+    Exit;
+  end;
+  { UsePreviousAppDir only sets a default. Installing the same AppId in a
+    different directory replaces the uninstall registration for the old one. }
+  if RegQueryStringValue(HKCU,
+    'Software\Microsoft\Windows\CurrentVersion\Uninstall\{#ProductAppId}_is1',
+    'Inno Setup: App Path', PreviousPath) and (PreviousPath <> '') and
+    (CompareText(ProgramPath, AddBackslash(ExpandFileName(PreviousPath))) <> 0) then
+    Result := FmtMessage(CustomMessage('KeepInstallationDirectory'), [PreviousPath]);
+end;
+
+function NextButtonClick(CurPageID: Integer): Boolean;
+var
+  ErrorMessage: String;
+begin
+  Result := True;
+  if CurPageID <> wpSelectDir then Exit;
+  ErrorMessage := ValidateInstallationDirectory;
+  if ErrorMessage <> '' then
+  begin
+    SuppressibleMsgBox(ErrorMessage, mbError, MB_OK, IDOK);
+    Result := False;
+  end;
+end;
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+begin
+  { An unattended installation can bypass the directory selection page. }
+  Result := ValidateInstallationDirectory;
+end;
 
 function GetReleaseDirectory(Param: String): String;
 var
@@ -125,8 +180,7 @@ begin
               Stream := TFileStream.Create(ExePath, fmOpenReadWrite or fmShareExclusive);
               Stream.Free;
             except
-              SuppressibleMsgBox('Please exit {#ProductName} before uninstalling. Your data will be retained.' + #13#10 +
-                '请先退出 {#ProductName}，然后重试卸载。记录与设置将保留。', mbError, MB_OK, IDOK);
+              SuppressibleMsgBox(FmtMessage(CustomMessage('ExitBeforeUninstall'), ['{#ProductName}']), mbError, MB_OK, IDOK);
               Result := False;
               Exit;
             end;

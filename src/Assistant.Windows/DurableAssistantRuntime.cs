@@ -433,11 +433,7 @@ internal sealed partial class DurableAssistantRuntime : IAsyncDisposable
             reply = "这条消息暂时无法完整处理，尚未作为工作指令执行。请缩短文字后再发。";
         else if (text is "文件帮助" or "附件帮助") reply = FileHelp();
         else if (text is "帮助" or "help" or "开始")
-            reply = channel.ReadOnlyReply(text) + "\n\n也可以说“十分钟后提醒我看结果”或“当前任务失败才叫我”。"
-                + "发“事项列表”查看已保存的安排；发“事项详情 完整编号”查看完整内容和处理记录。暂停、恢复、取消或删除时写完整事项编号。"
-                + "\n例如“设置事项 完整编号 安静时段 22:00-08:00”。提醒只在助手运行时检查，发送仍受渠道可用性影响。"
-                + "\n发“文件帮助”查看附件读取、图片分析和文件发送用法；发“渠道能力”查看可用范围；发“记忆来源 完整编号”核对一条记忆的来源。"
-                + "\n发“唤醒记录”查看短提示的实际回执；发“补报记录”查看正文补报。短提示受理不表示正文已补报或手机已收到。";
+            reply = ConversationHelp();
         else if (text.StartsWith("核对操作", StringComparison.Ordinal)) reply = ExistingControlRuntime.TryParseReconcile(text, out var operationId)
             ? ExistingRuntime == null ? "已有任务只读核对尚未配置。" : await ExistingRuntime.ReconcileOperationAsync(message, operationId, ct)
             : "请发送“核对操作 完整操作编号”。这项查询不会重发控制请求。";
@@ -450,15 +446,13 @@ internal sealed partial class DurableAssistantRuntime : IAsyncDisposable
         else if (text == "提醒状态") reply = await ReadCommitmentBudgetAsync(message.Identity, ct);
         else if (text is "唤醒记录" or "唤醒状态") reply = await ReadWakeStatusAsync(message.Identity, ct);
         else if (text is "补报" or "补报记录" or "补报状态") reply = await ReadCatchUpStatusAsync(message.Identity, ct);
-        else if (MemorySourceId(text) is { } memoryId)
+        else if (MemorySourceSelector(text) is { } memorySelector)
         {
             if (!settings.ChatGpt.PersonalizationEnabled) reply = "规则与长期记忆尚未启用，暂不读取记忆来源。";
             else
             {
-                var source = model.Memory.SourceDetails(memoryId);
+                reply = ReadMemorySource(memorySelector);
                 if (!IsCurrentBinding(message.Identity)) throw new OperationCanceledException("微信绑定已经变化。", ct);
-                reply = source == null ? "当前记忆中没有这个编号，请发“查看记忆”核对。"
-                    : $"记忆 {source.MemoryId}\n{source.Detail}";
             }
         }
         else if (IsOperationQuery(text)) reply = await ReadOperationsFastAsync(message, ct);
@@ -535,16 +529,38 @@ internal sealed partial class DurableAssistantRuntime : IAsyncDisposable
             || MemoryCommandResolver.Resolve(text, Array.Empty<AssistantMemoryEntry>()).Status != MemoryCommandStatus.None;
     private static bool IsReadonlyMemoryCommand(string text)
         => text is "自动记忆状态" or "记忆帮助" or "你记住了什么" or "你记住了什么？" or "你记住了什么?"
-            || MemorySourceId(text) != null
+            || MemorySourceSelector(text) != null
             || System.Text.RegularExpressions.Regex.IsMatch(text,
                 @"^(?:(?:查看记忆|记忆列表|长期记忆|我的记忆|记忆|查看规则|查看\s*AGENTS\.md|规则)(?:\s+\d{1,3})?)$",
                 System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
-    private static string? MemorySourceId(string text)
+    private string ReadMemorySource(string selector)
+    {
+        bool id = System.Text.RegularExpressions.Regex.IsMatch(selector, @"\A[0-9A-Fa-f]{8}\z");
+        if (!id)
+        {
+            var matches = model.Memory.Entries.Where(e => e.Metadata?.Scope.Kind != AssistantMemoryScopeKind.Project
+                && e.Text.Contains(selector, StringComparison.OrdinalIgnoreCase)).ToArray();
+            if (matches.Length == 0) return "没有找到包含这个关键词的个人记忆。可以先发“查看记忆”。";
+            if (matches.Length > 1) return "找到多条记忆，请用其中一条更具体的原文片段查来源：\n"
+                + string.Join("\n", matches.Take(5).Select(e => "• " + WeChatText.Clean(e.Text, 90)))
+                + (matches.Length > 5 ? $"\n共 {matches.Length} 条匹配。" : "")
+                + "\n发送“记忆来源”加上其中一条的独特文字。";
+            selector = matches[0].Id;
+        }
+        var source = model.Memory.SourceDetails(selector);
+        return source == null ? "当前记忆中没有这个编号，请发“查看记忆”核对。"
+            : $"记忆 {source.MemoryId}\n{source.Detail}";
+    }
+    private static string? MemorySourceSelector(string text)
     {
         var match = System.Text.RegularExpressions.Regex.Match(text,
-            @"\A记忆来源\s+([0-9A-Fa-f]{8})\z",
+            @"\A记忆来源[ \t]+([\p{L}\p{N} _-]{2,80})\z",
             System.Text.RegularExpressions.RegexOptions.CultureInvariant);
-        return match.Success ? match.Groups[1].Value : null;
+        if (!match.Success) return null;
+        string selector = match.Groups[1].Value.Trim();
+        if (selector.Length < 2 || System.Text.RegularExpressions.Regex.IsMatch(selector, @"\A[0-9A-Fa-f]+\z")
+            && selector.Length != 8) return null;
+        return selector;
     }
     private string ChannelCapabilitySummary() => AssistantChannelCapabilities.Describe(
         settings.WeChat.ClawBotEnabled, settings.WeChat.PushPlusEnabled, settings.ChatGpt.Enabled, channel.ConnectionState, settings.ActiveMedia);
@@ -593,9 +609,18 @@ internal sealed partial class DurableAssistantRuntime : IAsyncDisposable
             if (MemoryCommandResolver.Resolve(context.Message.Body, Array.Empty<AssistantMemoryEntry>()).Status == MemoryCommandStatus.None)
                 return null;
             if (!settings.ChatGpt.PersonalizationEnabled) return new(["规则与长期记忆尚未启用，这次没有修改记录。"]);
-            var resolved = MemoryCommandResolver.Resolve(context.Message.Body, model.Memory.Entries);
+            var entries = model.Memory.Entries.ToArray();
+            var resolved = MemoryCommandResolver.Resolve(context.Message.Body, entries);
             if (resolved.Status is MemoryCommandStatus.NeedsClarification or MemoryCommandStatus.Rejected)
-                return new([resolved.Message + (resolved.CandidateIds.IsEmpty ? "" : "\n编号：" + string.Join("、", resolved.CandidateIds))]);
+            {
+                var candidates = entries.Where(entry => resolved.CandidateIds.Contains(entry.Id)).ToArray();
+                var previews = candidates.Take(5).Select(entry => "• " +
+                    (entry.Metadata?.Scope.Kind == AssistantMemoryScopeKind.Project
+                        ? "指定项目范围的记忆；正文请在桌面项目知识编辑器查看。"
+                        : WeChatText.Clean(entry.Text, 120)) + "（" + entry.Id + "）");
+                return new([resolved.Message + (candidates.Length == 0 ? "" : "\n" + string.Join("\n", previews))
+                    + (candidates.Length > 5 ? $"\n共匹配 {candidates.Length} 条，先列出前 5 条。" : "")]);
+            }
             if (resolved.IsReady)
                 call = resolved.Action switch
                 {
@@ -682,7 +707,7 @@ internal sealed partial class DurableAssistantRuntime : IAsyncDisposable
             return call.Name switch
             {
                 "cancel_queued" => new(["这条待投递指令已取消。运行中的任务没有被中断。"]),
-                "remember" => new(["记住了。编号 " + result.Facts.GetProperty("memoryId").GetString() + "，之后可以查看、修改或删除。"]),
+                "remember" => new(["记住了。"]),
                 "forget" => new(["这条长期记忆已删除。历史对话和独立备份仍各自保留。"]),
                 "set_auto_memory" => new([settings.ChatGpt.AutoMemoryEnabled
                     ? "自动记忆已开启。只保存当前消息中明确的长期偏好；可以随时查看或删除。"

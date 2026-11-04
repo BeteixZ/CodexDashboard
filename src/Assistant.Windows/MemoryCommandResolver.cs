@@ -103,7 +103,7 @@ internal static class MemoryCommandResolver
             ? "update_memory" : "forget";
         if (!update.Success && !delete.Success)
             return Result(MemoryCommandStatus.NeedsClarification,
-                "请使用“删除记忆 完整编号”或“修改记忆 完整编号 新内容”。这里不根据“刚才那条”或数字选择执行。", action);
+                "请说“删除记忆 原文关键词”或“把记忆 原文关键词 改为 新内容”。关键词要能区分你想改的那条。", action);
         string replacement = update.Success ? update.Groups["body"].Value.Trim() : "";
         if (update.Success && (replacement.Length == 0 || replacement.All(char.IsPunctuation)
                 || replacement.Length > MaximumMemoryCharacters))
@@ -115,16 +115,16 @@ internal static class MemoryCommandResolver
             @"\A(?:全部|所有|全体|所有记忆|全部记忆|刚才那条|刚才|那条|这条|上一条|上一个|它|这些|第?[一二三四五六七八九十0-9]+条?)\z", Options)
             || AllHex.IsMatch(selector)))
             return Result(MemoryCommandStatus.NeedsClarification,
-                "请提供完整记忆编号或明确关键词；不按数字、短编号或“全部”执行。", action);
+                "请带上那条记忆里的具体词句，例如“删除记忆 技术汇报”；也可以使用完整编号。", action);
         var matches = fullId
             ? entries.Where(entry => entry.Id.Equals(selector, StringComparison.OrdinalIgnoreCase)).ToArray()
             : entries.Where(entry => entry.Text.Contains(selector, StringComparison.OrdinalIgnoreCase)).ToArray();
         if (matches.Length == 0)
             return Result(MemoryCommandStatus.NeedsClarification,
-                "当前记忆中没有匹配条目，请先发送“查看记忆”核对完整编号。", action);
+                "没找到包含这段内容的记忆。可以换一段原文关键词，或发“查看记忆”看看。", action);
         if (matches.Length > 1)
             return Result(MemoryCommandStatus.NeedsClarification,
-                "匹配了多条记忆，尚未执行。请使用其中一个完整编号重新发送“删除记忆 编号”或“修改记忆 编号 新内容”。",
+                "找到了几条相近的记忆，还没有修改。请用其中更具体的原文词句重发，例如“删除记忆 原文关键词”或“把记忆 原文关键词 改为 新内容”；内容相同时也可以用完整编号。",
                 action, candidates: matches.Select(entry => entry.Id));
         var target = matches[0];
         return Result(MemoryCommandStatus.Ready, action: action, id: target.Id,

@@ -84,7 +84,7 @@ internal static class DependentWorkRuntimeTests
         Check("explicit_resume_returns_to_waiting", (await Latest()).Stage == DependentWorkStage.Waiting);
         await Input("not-tests", $"等 {thread} 测试通过后，向 {thread} 发送：不应执行");
         Check("test_success_claim_is_not_rewritten_as_turn_completion", (await f.Ledger.GetDependentWorkAsync(identity)).WorkItems.Length == 1
-            && f.Sent.Any(s => s.Contains("尚不能") && s.Contains("测试通过")));
+            && rpc.GuardedTexts.IsEmpty && f.Sent.Any(s => s.Contains("指定命令的实际退出码")));
         await Input("list", "依赖列表");
         Check("list_reads_real_work_without_model", f.Sent.Any(s => s.Contains(work.Id.ToString("D")) && s.Contains("等待前置条件")));
         await Input("remembered", "你还记着哪些事");

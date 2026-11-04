@@ -59,10 +59,29 @@ internal static class AutomaticPreferenceToolTests
         {
             ("natural_preference", "我更喜欢分行", "我更喜欢分行", "report_layout", true),
             ("implicit_feedback", "分行看着更舒服", "分行看着更舒服", "report_layout", true),
+            ("listen_before_advice", "以后聊天别总给建议，我更喜欢你先听我说。", "以后聊天别总给建议，我更喜欢你先听我说。", "conversation_advice", true),
+            ("conditional_advice", "以后我明确问怎么办时，你再给建议，不用一直只听着。", "以后我明确问怎么办时，你再给建议，不用一直只听着。", "conversation_advice", true),
+            ("avoid_echoing_preference", "以后别总复述我的话。", "以后别总复述我的话。", "conversation_advice", true),
+            ("avoid_rhetorical_ending", "以后别总在结尾反问我。", "以后别总在结尾反问我。", "conversation_advice", true),
+            ("rhetorical_ending_misclassified_as_repetition", "以后别总在结尾反问我。", "以后别总在结尾反问我。", "conversation_repetition", true),
+            ("temporary_rhetorical_ending", "这次别在结尾反问我。", "这次别在结尾反问我。", "conversation_advice", false),
+            ("quoted_rhetorical_ending", "他说以后别总在结尾反问我。", "以后别总在结尾反问我。", "conversation_repetition", false),
+            ("temporary_echoing_request", "这次别重复我刚说的。", "这次别重复我刚说的。", "conversation_advice", false),
+            ("quoted_echoing_preference", "他说以后别总复述我的话。", "以后别总复述我的话。", "conversation_advice", false),
+            ("temporary_advice", "今天聊天别总给建议", "今天聊天别总给建议", "conversation_advice", false),
+            ("quoted_advice", "他说以后聊天别总给建议", "以后聊天别总给建议", "conversation_advice", false),
             ("independent_preference_beside_work", "继续测试。以后汇报先说结论。", "以后汇报先说结论", "report_order", true),
             ("quoted_nickname", "从现在起你叫“小桥”", "从现在起你叫“小桥”", "assistant_name", true),
             ("existing_persona_alias_form", "你是赛特，也叫瑟提（Sett）", "你是赛特，也叫瑟提（Sett）", "assistant_name", true),
+            ("assistant_name_correction", "你别叫小桥了，以后叫阿岚。", "你别叫小桥了，以后叫阿岚。", "assistant_name", true),
+            ("assistant_correction_wrong_role", "你别叫小桥了，以后叫阿岚。", "你别叫小桥了，以后叫阿岚。", "user_name", false),
+            ("assistant_correction_to_user", "你别叫小桥了，以后叫我阿岚。", "你别叫小桥了，以后叫我阿岚。", "assistant_name", false),
             ("user_name_separate", "叫我阿林", "叫我阿林", "user_name", true),
+            ("user_name_correction", "别再叫我老板了，以后叫我小林。", "别再叫我老板了，以后叫我小林。", "user_name", true),
+            ("user_name_opt_out", "以后别用昵称称呼我了，直接用你就行。", "以后别用昵称称呼我了，直接用你就行。", "user_name", true),
+            ("temporary_name_opt_out", "今天别叫我老板", "今天别叫我老板", "user_name", false),
+            ("quoted_name_opt_out", "他说别叫我老板", "别叫我老板", "user_name", false),
+            ("wrong_role_correction", "别再叫我老板了，以后叫你小林。", "别再叫我老板了，以后叫你小林。", "user_name", false),
             ("swapped_name_role", "叫我阿林", "叫我阿林", "assistant_name", false),
             ("name_question", "你叫什么？", "你叫什么", "assistant_name", false),
             ("preference_question", "我更喜欢分行吗？", "我更喜欢分行吗", "report_layout", false),
@@ -128,6 +147,117 @@ internal static class AutomaticPreferenceToolTests
                 && f.TransportCalls == 0 && !File.ReadAllText(f.Memory.DataPath!).Contains("我更喜欢分行", StringComparison.Ordinal));
             Require(new AssistantMemoryStore(f.MemoryRoot, f.Profile).Entries.Single() == f.Memory.Entries.Single());
         });
+        await Check("advice_correction_preserves_independent_tone", async () =>
+        {
+            await using var f = await New();
+            async Task Save(string key, string evidence) => await f.Run(evidence,
+                [Call("learn_preference", new { preferences = new[] { new { key, evidence } } })]);
+            await Save("tone", "以后语气直接一点。");
+            var tone = f.Memory.Entries.Single();
+            await Save("conversation_advice", "以后聊天别总给建议，我更喜欢你先听我说。");
+            var advice = f.Memory.Entries.Single(e => e.PreferenceKey == "conversation_advice");
+            const string corrected = "以后我明确问怎么办时，你再给建议，不用一直只听着。";
+            await Save("conversation_advice", corrected);
+            Require(f.Memory.Entries.Count == 2 && f.Memory.Entries.Single(e => e.Id == tone.Id) == tone
+                && f.Memory.Entries.Single(e => e.Id == advice.Id).Text == corrected);
+            var reopened = new AssistantMemoryStore(f.MemoryRoot, f.Profile);
+            Require(reopened.Entries.Count == 2 && reopened.Entries.Single(e => e.Id == tone.Id) == tone
+                && reopened.Entries.Single(e => e.Id == advice.Id).Text == corrected);
+        });
+        await Check("legacy_advice_is_corrected_without_overwriting_tone", async () =>
+        {
+            await using var f = await New();
+            f.Memory.LearnPreferences([new("tone", "以后聊天别总给建议，我更喜欢你先听我说。")], f.Memory.Capture().Stamp);
+            var legacy = f.Memory.Entries.Single();
+            await f.Run("以后语气直接一点。", [Call("learn_preference", new
+            { preferences = new[] { new { key = "tone", evidence = "以后语气直接一点。" } } })]);
+            const string correction = "以后我明确问怎么办时，你再给建议，不用一直只听着。";
+            await f.Run(correction, [Call("learn_preference", new
+            { preferences = new[] { new { key = "conversation_advice", evidence = correction } } })]);
+            Require(f.Memory.Entries.Count == 2 && f.Memory.Entries.Single(e => e.Id == legacy.Id).Text == correction
+                && f.Memory.Entries.Single(e => e.Id == legacy.Id).PreferenceKey == "conversation_advice"
+                && f.Memory.Entries.Single(e => e.PreferenceKey == "tone").Text == "以后语气直接一点。");
+        });
+        await Check("mixed_legacy_preference_survives_single_dimension_corrections", async () =>
+        {
+            await using var f = await New();
+            f.Memory.LearnPreferences([new("tone", "以后语气温柔一点，聊天先听我说，不要总给建议。")], f.Memory.Capture().Stamp);
+            var mixed = f.Memory.Entries.Single();
+            async Task Save(string key, string evidence) => await f.Run(evidence,
+                [Call("learn_preference", new { preferences = new[] { new { key, evidence } } })]);
+            await Save("tone", "以后语气直接一点。");
+            Require(f.Memory.Entries.Any(e => e == mixed));
+            await Save("conversation_advice", "以后我明确问怎么办时再给建议。");
+            await Save("tone", "以后语气委婉一点。");
+            var reopened = new AssistantMemoryStore(f.MemoryRoot, f.Profile);
+            Require(reopened.Entries.Count == 3 && reopened.Entries.Any(e => e == mixed)
+                && reopened.Entries.Count(e => e.Text == "以后语气委婉一点。") == 1
+                && reopened.Entries.Any(e => e.Text == "以后我明确问怎么办时再给建议。")
+                && !reopened.Entries.Any(e => e.Text == "以后语气直接一点。"));
+        });
+        await Check("language_correction_preserves_other_expression_preferences", async () =>
+        {
+            foreach (string originalKey in new[] { "language", "tone" })
+            {
+                await using var f = await New();
+                const string original = "以后用中文回答，语气温柔一点。";
+                f.Memory.LearnPreferences([new(originalKey, original)], f.Memory.Capture().Stamp);
+                var mixed = f.Memory.Entries.Single();
+                async Task Save(string key, string evidence) => await f.Run(evidence,
+                    [Call("learn_preference", new { preferences = new[] { new { key, evidence } } })]);
+                await Save("language", "以后用英文回答。");
+                await Save("tone", "以后语气直接一点。");
+                await Save("language", "以后用日语回答。");
+                var reopened = new AssistantMemoryStore(f.MemoryRoot, f.Profile);
+                Require(reopened.Entries.Count == 3 && reopened.Entries.Any(e => e == mixed)
+                    && reopened.Entries.Any(e => e.Text == "以后用日语回答。")
+                    && reopened.Entries.Any(e => e.Text == "以后语气直接一点。")
+                    && !reopened.Entries.Any(e => e.Text == "以后用英文回答。"));
+            }
+        });
+        await Check("repetition_preference_does_not_replace_advice_preference", async () =>
+        {
+            await using var f = await New();
+            const string advice = "以后聊天先听我说，不要总给建议。";
+            f.Memory.LearnPreferences([new("conversation_advice", advice)], f.Memory.Capture().Stamp);
+            const string echo = "以后别总复述我的话。";
+            await f.Run(echo, [Learn(echo, "conversation_advice")]);
+            const string correction = "以后需要核对时可以复述我的话。";
+            await f.Run(correction, [Learn(correction, "conversation_repetition")]);
+            var reopened = new AssistantMemoryStore(f.MemoryRoot, f.Profile);
+            Require(reopened.Entries.Count == 2 && reopened.Entries.Any(e => e.Text == advice)
+                && reopened.Entries.Single(e => e.PreferenceKey == "conversation_repetition").Text == correction);
+        });
+        await Check("question_and_advice_corrections_survive_reopen_independently", async () =>
+        {
+            await using var f = await New();
+            const string advice = "以后我明确问怎么办时再给建议。";
+            const string questions = "以后别总在结尾反问我。";
+            f.Memory.LearnPreferences([new("conversation_advice", advice)], f.Memory.Capture().Stamp);
+            await f.Run(questions, [Learn(questions, "conversation_advice")]);
+            Require(f.Memory.Entries.Count == 2 && f.Memory.Entries.Any(e => e.Text == advice));
+            const string corrected = "以后信息不够时可以追问。";
+            await f.Run(corrected, [Learn(corrected, "conversation_questions")]);
+            const string updatedAdvice = "以后可以直接给建议。";
+            await f.Run(updatedAdvice, [Learn(updatedAdvice, "conversation_advice")]);
+            var reopened = new AssistantMemoryStore(f.MemoryRoot, f.Profile);
+            Require(reopened.Entries.Count == 2 && reopened.Entries.Any(e => e.Text == corrected)
+                && reopened.Entries.Any(e => e.Text == updatedAdvice));
+        });
+        await Check("legacy_question_key_and_mixed_original_are_preserved", async () =>
+        {
+            await using var f = await New();
+            const string original = "以后别总给建议，也别总在结尾反问我。";
+            f.Memory.LearnPreferences([new("conversation_advice", original)], f.Memory.Capture().Stamp);
+            const string legacy = "以后别总在结尾反问我。";
+            f.Memory.LearnPreferences([new("conversation_advice", legacy)], f.Memory.Capture().Stamp);
+            var legacyId = f.Memory.Entries.Single(e => e.Text == legacy).Id;
+            const string corrected = "以后信息不够时可以追问。";
+            await f.Run(corrected, [Learn(corrected, "conversation_advice")]);
+            Require(f.Memory.Entries.Count == 2 && f.Memory.Entries.Any(e => e.Text == original)
+                && f.Memory.Entries.Single(e => e.Id == legacyId).Text == corrected
+                && f.Memory.Entries.Single(e => e.Id == legacyId).PreferenceKey == "conversation_questions");
+        });
         await Check("names_remain_separate_and_manual_persona_is_preserved", async () =>
         {
             await using var f = await New();
@@ -139,6 +269,54 @@ internal static class AutomaticPreferenceToolTests
             Require(result.State == ToolLoopState.Completed && f.Memory.Entries.Single(e => e.Id == persona.Id) == persona
                 && f.Memory.Entries.Single(e => e.PreferenceKey == "assistant_name").Text == "你叫小桥"
                 && f.Memory.Entries.Single(e => e.PreferenceKey == "user_name").Text == "叫我阿林");
+        });
+        await Check("explicit_name_correction_saves_without_model_proposal", async () =>
+        {
+            await using var f = await New();
+            var source = await f.Receive("你别叫小桥了，以后叫阿岚。");
+            var model = new ReplyOnly();
+            var result = await f.Loop(model).RunAsync(Id, source.SourceMessageId);
+            Require(result.State == ToolLoopState.Completed && model.Calls == 1
+                && f.Memory.Entries.Single().PreferenceKey == "assistant_name"
+                && f.Memory.Entries.Single().Text == source.Body
+                && (await f.Read()).Operations.Single().Stage == OperationStage.Completed);
+        });
+        await Check("name_correction_respects_disabled_learning_and_temporary_scope", async () =>
+        {
+            foreach (var item in new[] { ("你别叫小桥了，以后叫阿岚。", false), ("今天你别叫小桥了，以后叫阿岚。", true), ("他说你别叫小桥了，以后叫阿岚。", true) })
+            {
+                await using var f = await New();
+                f.Toggle(item.Item2);
+                var source = await f.Receive(item.Item1);
+                var result = await f.Loop(new ReplyOnly()).RunAsync(Id, source.SourceMessageId);
+                Require(result.State == ToolLoopState.Completed && f.Memory.Entries.Count == 0
+                    && (await f.Read()).Operations.IsEmpty);
+            }
+        });
+        await Check("explicit_language_setting_saves_without_model_proposal", async () =>
+        {
+            await using var f = await New();
+            f.Memory.LearnPreferences([new("language", "以后用中文回答，语气温柔一点。")], f.Memory.Capture().Stamp);
+            var source = await f.Receive("以后用英文回答。");
+            var model = new ReplyOnly();
+            var result = await f.Loop(model).RunAsync(Id, source.SourceMessageId);
+            Require(result.State == ToolLoopState.Completed && model.Calls == 1
+                && f.Memory.Entries.Count == 2
+                && f.Memory.Entries.Any(e => e.Text == source.Body)
+                && (await f.Read()).Operations.Single().Stage == OperationStage.Completed);
+        });
+        await Check("language_setting_does_not_promote_questions_quotes_or_disabled_learning", async () =>
+        {
+            foreach (var item in new[] { ("以后用英文回答。", false), ("今天用英文回答。", true),
+                ("他说以后用英文回答。", true), ("以后用英文回答吗？", true), ("以后用英文回答这道题。", true) })
+            {
+                await using var f = await New();
+                f.Toggle(item.Item2);
+                var source = await f.Receive(item.Item1);
+                var result = await f.Loop(new ReplyOnly()).RunAsync(Id, source.SourceMessageId);
+                Require(result.State == ToolLoopState.Completed && f.Memory.Entries.Count == 0
+                    && (await f.Read()).Operations.IsEmpty);
+            }
         });
         await Check("duplicate_calls_and_existing_preference_do_not_rewrite_memory", async () =>
         {
@@ -374,10 +552,17 @@ internal static class AutomaticPreferenceToolTests
                 }), f.Memory);
             var current = await f.Receive("我更喜欢分行");
             string stamp = f.Memory.Capture().Stamp;
-            var response = await ((IToolModel)assistant).GenerateAsync(new(current, current.Revision, [],
-                AssistantToolExecutor.Catalog().AvailableDefinitions(f.Executor), []), default);
+            var request = new ToolModelRequest(current, current.Revision, [], AssistantToolExecutor.Catalog().AvailableDefinitions(f.Executor), []);
+            Require(ChatGptAssistant.CurrentUserTurn(request with { CurrentMessage = current with { Trust = MessageTrust.UntrustedContent } }) == null
+                && ChatGptAssistant.CurrentUserTurn(request with { DeferredWork = new(Guid.NewGuid(), Id, current.SourceMessageId,
+                    current.Revision, 1, 1, InputWorkStage.Reading, current.ReceivedAt, current.ReceivedAt) }) == null);
+            var response = await ((IToolModel)assistant).GenerateAsync(request, default);
             Require(response.Calls.Single().Name == "learn_preference" && f.Memory.Capture().Stamp == stamp);
             var input = body.GetProperty("input").EnumerateArray().Select(e => e.GetProperty("content").GetString()!).ToArray();
+            Require(input.Last() == current.Body);
+            using var toolContext = JsonDocument.Parse(input[^2]);
+            Require(toolContext.RootElement.GetProperty("currentUserMessage").GetProperty("text").GetString() == current.Body
+                && toolContext.RootElement.TryGetProperty("availableTools", out _));
             string memoryInput = input.Single(value => value.StartsWith("assistant_memory", StringComparison.Ordinal));
             using var memoryData = JsonDocument.Parse(memoryInput[(memoryInput.IndexOf('\n') + 1)..]);
             var names = memoryData.RootElement.GetProperty("entries").EnumerateArray().Select(e => e.GetProperty("text").GetString()!).ToArray();
@@ -394,6 +579,12 @@ internal static class AutomaticPreferenceToolTests
     private static ModelToolCall Call(string name, object args) => new(Guid.NewGuid().ToString("N"), name, JsonSerializer.Serialize(args));
     private static void Require(bool value) { if (!value) throw new InvalidOperationException("assertion_failed"); }
     private sealed record Prepared(ModelToolCall Call, ToolExecutionContext Context, GenerationLease Lease);
+    private sealed class ReplyOnly : IToolModel
+    {
+        internal int Calls;
+        public Task<ToolModelResponse> GenerateAsync(ToolModelRequest request, CancellationToken ct)
+        { Calls++; return Task.FromResult(ToolModelResponse.Reply("测试回复。")); }
+    }
     private sealed class Script(ModelToolCall[] calls, Action? beforeReturn = null, bool failFinal = false) : IToolModel
     {
         private int turns;

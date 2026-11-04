@@ -298,17 +298,19 @@ internal static class DurableRuntimeTests
             var two = f.Model.Memory.Add("共同关键词：项目乙");
             await f.InputAsync("natural-memory-ambiguous", "删除记忆 共同关键词");
             await WaitAsync(async () => (await f.ReadAsync()).Outbox.Count(o => o.Stage == OutboxStage.Accepted) == 4);
-            Check("ambiguous_memory_lists_ids_without_creating_task_selection_or_operation",
+            Check("ambiguous_memory_shows_content_without_creating_task_selection_or_operation",
                 f.Model.Memory.Entries.Count == 2 && f.Sent.Last().Contains(one.Id) && f.Sent.Last().Contains(two.Id)
+                && f.Sent.Last().Contains("共同关键词：项目甲") && f.Sent.Last().Contains("共同关键词：项目乙")
+                && f.Sent.Last().Contains("原文关键词")
                 && (await f.ReadAsync()).Operations.Length == 3
                 && (await f.Ledger.ReadConversationContextAsync(f.Runtime.Identity!)).PendingSelection == null);
             await f.InputAsync("natural-memory-digit", "1");
             await WaitAsync(async () => (await f.ReadAsync()).Outbox.Count(o => o.Stage == OutboxStage.Accepted) == 5);
             Check("ambiguous_memory_does_not_authorize_numeric_followup",
                 f.Model.Memory.Entries.Count == 2 && (await f.ReadAsync()).Operations.Length == 3 && f.Script.Calls == 0);
-            await f.InputAsync("natural-memory-explicit", "删除记忆 " + two.Id);
+            await f.InputAsync("natural-memory-explicit", "删除记忆 项目乙");
             await WaitAsync(async () => (await f.ReadAsync()).Outbox.Count(o => o.Stage == OutboxStage.Accepted) == 6);
-            Check("clarified_memory_requires_new_explicit_id_request",
+            Check("clarified_memory_accepts_specific_keyword_without_copying_id",
                 f.Model.Memory.Entries.Single().Id == one.Id && (await f.ReadAsync()).Operations.Length == 4);
         }
         {

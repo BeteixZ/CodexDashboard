@@ -84,7 +84,9 @@ public partial class App : Application
             web = new WebMonitorServer();
             vm.Updated += () =>
             {
-                web.Publish(vm);
+                // An in-flight refresh still raises Updated when disposal cancels collection.
+                if (Exiting) return;
+                web?.Publish(vm);
                 status?.Publish(new()
                 {
                     ObservedAt = DateTimeOffset.UtcNow,
@@ -123,8 +125,10 @@ public partial class App : Application
             };
             timer.Start();
             await ConfigureWeb();
+            if (Exiting) return;
             SaveSettings();
             await vm.RefreshAsync();
+            if (Exiting) return;
             if (e.Args.Contains("--wechat-settings")) ShowSettings(true);
             if (e.Args.Contains("--chatgpt-connect")) ShowChatGpt(true);
         }

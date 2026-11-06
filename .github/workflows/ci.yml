@@ -58,5 +58,7 @@ jobs:
             ${{ runner.temp }}/project-checks/assistant-recovery-inspection/inspection-checks.json
             ${{ runner.temp }}/project-checks/assistant-adapter/adapter-checks.json
             ${{ runner.temp }}/project-checks/assistant-preference-tools/preference-tool-checks.json
+            ${{ runner.temp }}/project-checks/assistant-conversation-history/history-checks.json
+            ${{ runner.temp }}/project-checks/assistant-history-pagination/history-pagination-runtime-checks.json
           if-no-files-found: warn
           retention-days: 14

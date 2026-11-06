@@ -83,6 +83,8 @@ try {
     Invoke-Check -Name 'assistant-recovery-inspection' -Executable 'dotnet' -Arguments @($assistantAssembly, '--ledger-inspection-test', (Join-Path $output 'assistant-recovery-inspection'))
     Invoke-Check -Name 'assistant-adapter' -Executable 'dotnet' -Arguments @($assistantAssembly, '--agent-adapter-test', (Join-Path $output 'assistant-adapter'))
     Invoke-Check -Name 'assistant-preference-tools' -Executable 'dotnet' -Arguments @($assistantAssembly, '--automatic-preference-tools-test', (Join-Path $output 'assistant-preference-tools'))
+    Invoke-Check -Name 'assistant-conversation-history' -Executable 'dotnet' -Arguments @($assistantAssembly, '--conversation-history-runtime-test', (Join-Path $output 'assistant-conversation-history'))
+    Invoke-Check -Name 'assistant-history-pagination' -Executable 'dotnet' -Arguments @($assistantAssembly, '--history-pagination-runtime-test', (Join-Path $output 'assistant-history-pagination'))
     [ordered]@{ syntheticOnly = $true; completed = $true; passed = $true; startedAt = $started; completedAt = [DateTimeOffset]::UtcNow; checks = @($results.ToArray()) } |
         ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $output 'summary.json') -Encoding utf8
     Write-Host "All isolated project checks passed. Evidence: $output"

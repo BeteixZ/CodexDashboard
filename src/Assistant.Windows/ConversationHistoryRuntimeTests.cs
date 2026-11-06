@@ -18,6 +18,7 @@ internal static class ConversationHistoryRuntimeTests
         if (!Path.IsPathFullyQualified(directory) || Directory.Exists(directory))
             throw new ArgumentException("A fresh isolated directory is required.");
         Directory.CreateDirectory(directory);
+        Settings.SetDataDirectory(Path.Combine(directory, "isolated-settings"));
         var checks = new Dictionary<string, bool>();
         void Check(string name, bool passed)
         {
@@ -28,6 +29,8 @@ internal static class ConversationHistoryRuntimeTests
         try
         {
             await AnchoredSearchAsync(Path.Combine(directory, "anchored-search"), Check);
+            await TwoPlansAsync(Path.Combine(directory, "two-plans"), Check);
+            await PagingBudgetAsync(Path.Combine(directory, "paging-budget"), Check);
             await LookupAsync(Path.Combine(directory, "lookup"), Check);
             await RelativeDatesAsync(Path.Combine(directory, "relative-dates"), Check);
             await UnmatchedQueryAsync(Path.Combine(directory, "unmatched-query"), Check);
@@ -41,6 +44,134 @@ internal static class ConversationHistoryRuntimeTests
             File.WriteAllText(Path.Combine(directory, "failure.txt"), error.ToString()); exit(1);
         }
         return true;
+    }
+
+    private static async Task TwoPlansAsync(string directory, Action<string, bool> check)
+    {
+        await using var f = await DurableRuntimeTests.Fixture.CreateAsync(directory);
+        const string planA = "A事项：牙医复诊安排在11月12日09:00。";
+        const string planB = "B事项：图书馆写作安排在11月13日14:00。";
+        const string correction = "只把A事项改为11月14日10:30，B事项保持原样。";
+        const string mistakenAssistant = "牙医复诊仍是11月12日09:00；图书馆写作已经改到11月16日16:00。";
+        async Task Input(string id, string body)
+        { await f.InputAsync(id, body); await Settled(f, id); }
+        await Input("plan-a", planA);
+        await Input("plan-b", planB);
+        for (int i = 0; i < 6; i++) await Input("between-" + i, "中间讨论 " + i);
+        await Input("correct-a", correction);
+        f.Script.Handler = (_, _) => Task.FromResult(ToolModelResponse.Reply(mistakenAssistant));
+        await Input("mistaken-answer", "请确认前面的两项安排。");
+        await Input("reset-plans", "新对话");
+        var baseline = await f.ReadAsync();
+        var originalA = baseline.Events.Single(e => e.Source == ConversationSource.TrustedUser && e.Body == planA);
+        var originalB = baseline.Events.Single(e => e.Source == ConversationSource.TrustedUser && e.Body == planB);
+        var corrected = baseline.Events.Single(e => e.Source == ConversationSource.TrustedUser && e.Body == correction);
+        var seen = new List<JsonElement>();
+        bool wrongSourceMarked = false, originalReadable = false, correctionBeyondFirstPage = false;
+        bool currentContextExcluded = false;
+        int pages = 0;
+        JsonElement following = default;
+        // This is an evidence consumer, not a model-quality test. It deliberately
+        // uses only source-labelled user rows and follows the tool's exact cursor.
+        f.Script.Handler = (request, _) =>
+        {
+            if (request.Observations.IsEmpty)
+            {
+                currentContextExcluded = !request.Context.Any(e => e.Id == originalA.Id || e.Id == corrected.Id);
+                return Task.FromResult(ToolModelResponse.Call(Call("plan-find", "search_history", new { query = "牙医" })));
+            }
+            using var result = JsonDocument.Parse(request.Observations.Last().ResultJson);
+            var facts = result.RootElement.GetProperty("facts");
+            if (request.Observations.Length == 1)
+            {
+                var rows = facts.GetProperty("records").EnumerateArray().ToArray();
+                wrongSourceMarked = rows.Any(row => row.GetProperty("text").GetString() == mistakenAssistant
+                    && row.GetProperty("evidence").GetString() == "assistant_statement"
+                    && !row.GetProperty("independentlyVerified").GetBoolean());
+                var source = rows.Single(row => row.GetProperty("eventId").GetGuid() == originalA.Id);
+                seen.Add(source.Clone());
+                following = facts.GetProperty("followingPages").EnumerateArray()
+                    .Single(page => page.GetProperty("eventId").GetGuid() == originalA.Id).GetProperty("arguments").Clone();
+                return Task.FromResult(ToolModelResponse.Call(Call("plan-original", "read_history_event", new { eventId = originalA.Id })));
+            }
+            if (request.Observations.Length == 2)
+            {
+                var record = facts.GetProperty("record");
+                originalReadable = record.GetProperty("text").GetString() == planA
+                    && record.GetProperty("evidence").GetString() == "user_statement";
+                return Task.FromResult(ToolModelResponse.Call(Call("plan-after", "search_history", following)));
+            }
+            pages++;
+            var records = facts.GetProperty("records").EnumerateArray().Select(row => row.Clone()).ToArray();
+            if (records.Any(row => row.GetProperty("eventId").GetGuid() == corrected.Id))
+                correctionBeyondFirstPage = pages > 1;
+            seen.AddRange(records);
+            if (facts.GetProperty("nextPageArguments").ValueKind != JsonValueKind.Null)
+                return Task.FromResult(ToolModelResponse.Call(Call("plan-page-" + pages, "search_history", facts.GetProperty("nextPageArguments").Clone())));
+            var users = seen.Where(row => row.GetProperty("evidence").GetString() == "user_statement").ToArray();
+            bool found = users.Any(row => row.GetProperty("eventId").GetGuid() == originalB.Id && row.GetProperty("text").GetString() == planB)
+                && users.Any(row => row.GetProperty("eventId").GetGuid() == corrected.Id && row.GetProperty("text").GetString() == correction);
+            return Task.FromResult(ToolModelResponse.Reply(found
+                ? "用户原话：A事项已改为11月14日10:30；B事项仍是11月13日14:00。助手后来的转述不是用户修改。"
+                : "尚未找到两项安排的完整用户原话。"));
+        };
+        int sentBefore = f.Sent.Count;
+        await Input("recall-plans", "以前牙医和图书馆那两件事最后怎么安排？只回顾原话，不要执行。");
+        var saved = await f.ReadAsync();
+        File.WriteAllText(Path.Combine(directory, "two-plans-observations.json"), JsonSerializer.Serialize(new
+        {
+            actualHost = true, actualModelUsed = false, networkUsed = false,
+            invocations = saved.ToolInvocations.Select(i => new { i.ToolName, i.ArgumentsJson, i.ResultJson }),
+            answer = f.Sent.Skip(sentBefore).ToArray()
+        }, Settings.Json));
+        check("two_plans_originals_and_keyword_free_correction_are_read_across_actual_tool_pages", currentContextExcluded
+            && originalReadable && correctionBeyondFirstPage && pages > 1
+            && seen.Count(row => row.GetProperty("eventId").GetGuid() == corrected.Id) == 1);
+        check("later_wrong_assistant_is_labelled_separately_from_authenticated_user_plans", wrongSourceMarked
+            && seen.Where(row => row.GetProperty("eventId").GetGuid() == corrected.Id)
+                .All(row => row.GetProperty("evidence").GetString() == "user_statement")
+            && f.Sent.Skip(sentBefore).Single().Contains("B事项仍是11月13日14:00"));
+        check("history_evidence_keeps_both_originals_and_correction_without_scheduling_or_control", baseline.Events.All(e =>
+            saved.Events.Any(after => after.Id == e.Id && after.Source == e.Source && after.Body == e.Body))
+            && saved.Operations.IsEmpty && saved.WorkItems.IsEmpty && f.Queue.Entries.Count == 0);
+    }
+
+    private static async Task PagingBudgetAsync(string directory, Action<string, bool> check)
+    {
+        await using var f = await DurableRuntimeTests.Fixture.CreateAsync(directory);
+        for (int i = 0; i < 91; i++)
+            await f.Ledger.AppendContextAsync(f.Runtime.Identity!, ConversationSource.Report, "预算分页原文 " + i, DateTimeOffset.UtcNow);
+        bool moreRemained = false;
+        f.Script.Handler = (request, _) =>
+        {
+            if (request.Observations.IsEmpty)
+                return Task.FromResult(ToolModelResponse.Call(Call("budget-first", "search_history", new { query = "预算分页原文" })));
+            using var result = JsonDocument.Parse(request.Observations.Last().ResultJson);
+            var facts = result.RootElement.GetProperty("facts");
+            moreRemained = facts.GetProperty("nextPageArguments").ValueKind != JsonValueKind.Null;
+            return Task.FromResult(moreRemained
+                ? ToolModelResponse.Call(Call("budget-page-" + request.Observations.Length, "search_history", facts.GetProperty("nextPageArguments").Clone()))
+                : ToolModelResponse.Reply("已读完整个历史。"));
+        };
+        await f.InputAsync("budget-recall", "查完预算分页原文再回答。"); await Settled(f, "budget-recall");
+        var exhausted = await f.ReadAsync();
+        var firstAnswer = f.Sent.ToArray();
+        var oldSource = exhausted.Inbox.Single(i => i.SourceMessageId == WeChatText.Hash("budget-recall"));
+        var calls = exhausted.ToolInvocations.Where(i => i.SourceMessageId == oldSource.SourceMessageId).ToArray();
+        File.WriteAllText(Path.Combine(directory, "budget-observations.json"), JsonSerializer.Serialize(new
+        {
+            actualHost = true, actualModelUsed = false, networkUsed = false,
+            invocations = calls.Select(i => new { i.ToolName, i.ArgumentsJson, i.ResultJson }), answer = firstAnswer
+        }, Settings.Json));
+        check("actual_history_paging_budget_stops_with_truthful_incomplete_answer", moreRemained && calls.Length == 8
+            && firstAnswer.Single().Contains("这次还没处理完") && firstAnswer.Single().Contains("之前的记录还没查完")
+            && !firstAnswer.Single().Contains("已读完整个历史"));
+        f.Script.Handler = (_, _) => Task.FromResult(ToolModelResponse.Reply("新的问题可以正常回答。"));
+        await f.InputAsync("after-budget", "请回答新的问题。"); await Settled(f, "after-budget");
+        var after = await f.ReadAsync();
+        check("history_budget_is_per_input_and_new_input_still_replies_without_operations", f.Sent.Last() == "新的问题可以正常回答。"
+            && after.ToolInvocations.Count(i => i.SourceMessageId == oldSource.SourceMessageId) == calls.Length
+            && after.Operations.IsEmpty && after.WorkItems.IsEmpty && f.Queue.Entries.Count == 0);
     }
 
     private static async Task AnchoredSearchAsync(string directory, Action<string, bool> check)

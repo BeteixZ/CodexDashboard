@@ -91,10 +91,11 @@ public sealed partial class DurableConversationLedger
             var body = outputs.Single(x => x.Id == source.OutboxId).Body;
             return body.Substring(source.Start, source.Length!.Value);
         }));
-    private sealed class CatchPage(Guid id, string group)
+    private sealed class CatchPage(Guid id, string group, bool quiet)
     {
         internal Guid Id { get; } = id;
         internal string Group { get; } = group;
+        internal bool Quiet { get; } = quiet;
         internal StringBuilder Text { get; } = new(CatchUpHeading(group));
         internal List<CatchUpMember> Members { get; } = [];
     }
@@ -102,14 +103,19 @@ public sealed partial class DurableConversationLedger
     private CatchUpCaptureResult PrepareSpanCatchUp(LedgerState state, CatchUpWindow window)
     {
         var snapshot = SnapshotOf(state, window.Identity);
+        var now = _clock.UtcNow;
+        // All pages share segment order. Prepare sendable sources before quiet ones.
         var selected = window.CandidateEventIds.Select(id => snapshot.Events.Single(x => x.Id == id)).Select(entry =>
         {
             var outputs = snapshot.Outbox.Where(x => x.NotificationEventId == entry.Id).OrderBy(x => x.SegmentIndex).ToArray();
             var draft = snapshot.NotificationDrafts.SingleOrDefault(x => x.EventId == entry.Id);
             var run = draft?.WorkRunId is { } id ? snapshot.CommitmentRuns.Single(x => x.Id == id) : null;
-            return (Entry: entry, Outputs: outputs, Run: run, Group: CatchUpGroup(snapshot, entry, run));
-        }).Where(x => SpanSourceReady(snapshot, x.Entry, x.Outputs, _clock.UtcNow))
-            .OrderBy(x => x.Group, StringComparer.Ordinal).ThenBy(x => x.Entry.RecordedAt).ThenBy(x => x.Entry.Id)
+            bool quiet = run != null && InCommitmentQuietHours(
+                snapshot.WorkItems.Single(x => x.Id == run.WorkItemId).Policy, now);
+            return (Entry: entry, Outputs: outputs, Run: run, Group: CatchUpGroup(snapshot, entry, run), Quiet: quiet);
+        }).Where(x => SpanSourceReady(snapshot, x.Entry, x.Outputs, now))
+            .OrderBy(x => x.Quiet).ThenBy(x => x.Group, StringComparer.Ordinal)
+            .ThenBy(x => x.Entry.RecordedAt).ThenBy(x => x.Entry.Id)
             .Take(_options.CatchUp.MaximumEvents).ToArray();
         var pages = new List<CatchPage>();
         var planned = new Dictionary<Guid, int>();
@@ -122,12 +128,12 @@ public sealed partial class DurableConversationLedger
                 var heading = SpanHeading(source.Entry, window.Input.DisplayTimeZoneId);
                 var page = pages.LastOrDefault();
                 int separator = page?.Members.Count > 0 ? 2 : 0;
-                if (page == null || page.Group != source.Group
+                if (page == null || page.Group != source.Group || page.Quiet != source.Quiet
                     || page.Text.Length + separator + heading.Length + 2 > _options.CatchUp.MaximumPageCharacters
                     || !CanShareSpanPage(snapshot, pages, page, source.Run))
                 {
                     if (pages.Count == _options.CatchUp.MaximumPages) break;
-                    page = new(Guid.NewGuid(), source.Group); pages.Add(page); separator = 0;
+                    page = new(Guid.NewGuid(), source.Group, source.Quiet); pages.Add(page); separator = 0;
                 }
                 if (separator != 0) page.Text.Append("\n\n");
                 page.Text.Append(heading);
@@ -158,7 +164,7 @@ public sealed partial class DurableConversationLedger
         Replace(state.CatchUpWindows, window, updated);
         if (pages.Count == 0) return new(updated, null, []);
         state.SchemaVersion = Math.Max(state.SchemaVersion, 4);
-        var now = _clock.UtcNow; var batchId = Guid.NewGuid(); var eventId = Guid.NewGuid();
+        var batchId = Guid.NewGuid(); var eventId = Guid.NewGuid();
         var parts = pages.Select(x => x.Text.ToString()).ToImmutableArray();
         foreach (var part in parts) ValidateBody(part);
         string body = string.Join("\n\n", parts); ValidateBody(body);
@@ -191,8 +197,10 @@ public sealed partial class DurableConversationLedger
     }
     private bool SpanSourceReady(ConversationSnapshot snapshot, ConversationEvent entry, OutboxMessage[] originals, DateTimeOffset now)
     {
+        // Preserve the page while quiet hours block dispatch. Send-time and
+        // recovery checks continue to enforce every source's quiet-hour policy.
         if (entry.RequiredDecision != null || UnclassifiedRequiredDecision(entry) || originals.Length == 0
-            || EventDeliveryUncertain(snapshot, entry.Id) || !CatchUpSourcePolicyReady(snapshot, entry, now, checkQuiet: true)) return false;
+            || EventDeliveryUncertain(snapshot, entry.Id) || !CatchUpSourcePolicyReady(snapshot, entry, now, checkQuiet: false)) return false;
         bool any = false;
         foreach (var output in originals)
         {

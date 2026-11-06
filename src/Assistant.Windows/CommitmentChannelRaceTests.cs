@@ -167,12 +167,33 @@ internal static class CommitmentChannelRaceTests
                 && state.Outbox.Any(o => o.Kind == OutboxKind.Notification && o.Id != quietOutbox.Id && o.Stage == OutboxStage.Accepted)
                 && !f.Sent.Contains(QuietBody) && f.Script.Calls == 0);
             clock.Set(new(2026, 10, 22, 6, 1, 0, TimeSpan.Zero));
-            await WaitAsync(async () => (await f.ReadAsync()).Outbox.Single(o => o.Id == quietOutbox.Id).Stage == OutboxStage.Accepted);
+            try
+            {
+                await WaitAsync(async () =>
+                {
+                    var progress = DurableConversationLedger.GetCatchUpProgress(await f.ReadAsync())
+                        .SingleOrDefault(p => p.SourceEventId == quietOutbox.NotificationEventId);
+                    return progress != null && progress.RemainingCharacters == 0
+                        && progress.Sources.Single(s => s.OutboxId == quietOutbox.Id).AcceptedCharacters == quietOutbox.Body.Length;
+                });
+            }
+            catch (TimeoutException)
+            {
+                state = await f.ReadAsync();
+                File.WriteAllText(Path.Combine(directory, "quiet-delivery-diagnostic.json"), JsonSerializer.Serialize(new
+                {
+                    f.Runtime.LastError, state.WorkItems, state.CommitmentRuns, state.Outbox,
+                    state.NotificationDrafts, state.CatchUpWindows, state.CatchUpBatches,
+                    progress = DurableConversationLedger.GetCatchUpProgress(state), sent = f.Sent.ToArray()
+                }, Settings.Json));
+                throw;
+            }
             state = await f.ReadAsync();
-            Check("quiet_end_delivers_original_pending_reminder_once_without_recreating_work",
+            Check("quiet_end_delivers_exact_catchup_once_without_recreating_work",
                 state.WorkItems.Length == 1 && state.CommitmentRuns.Length == 1
-                && f.Sent.Count(body => body == QuietBody) == 1
-                && state.Outbox.Single(o => o.Id == quietOutbox.Id).SendAttempts == 1
+                && !f.Sent.Contains(QuietBody) && f.Sent.Count(body => body.EndsWith(QuietBody, StringComparison.Ordinal)) == 1
+                && state.Outbox.Single(o => o.Id == quietOutbox.Id).Stage == OutboxStage.Pending
+                && state.Outbox.Single(o => o.Id == quietOutbox.Id).SendAttempts == 0
                 && state.Operations.Length == 1 && f.Queue.Entries.Count == 0 && f.Script.Calls == 0);
         }
     }
@@ -233,7 +254,7 @@ internal static class CommitmentChannelRaceTests
         const string source = "trusted-quiet-fixture";
         string body = "2026-10-21 18:01 UTC 提醒我" + QuietBody + "，静默 18:03 至 06:00 UTC";
         var received = await ledger.ReceiveAsync(identity, source, body, MessageTrust.AuthenticatedUser, clock.UtcNow);
-        var lease = await ledger.BeginGenerationAsync(identity, [source]);
+        var lease = await ledger.BeginGenerationAsync(identity, [source], outputDependencies: OutputDependencies.Independent);
         var invocation = await ledger.RegisterToolInvocationAsync(lease, source, "synthetic-quiet", "schedule", canonical, true);
         var authorization = await ledger.AuthorizeCurrentUserRequestAsync(identity, source, "schedule",
             CommitmentTools.TargetKey("schedule", canonical), canonical, body);

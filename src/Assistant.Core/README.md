@@ -452,11 +452,16 @@ of that same batch reuse the charge; a new batch in a later window requires a ne
 charges for a page are atomic and obey shared and per-work aggregate limits. Packing separates run
 combinations that can never be reserved together because of an absolute quota or a work's minimum
 interval. Temporary quota exhaustion remains a send-time gate: it consumes nothing and permits the
-current ordinary reply. Quiet periods defer; changed/cancelled/expired source facts retire only
+current ordinary reply. Pages can be prepared during quiet periods; quiet periods defer sending,
+including after restart. Sources that can send now precede quiet sources and do not share their pages.
+Changed/cancelled/expired source facts retire only
 unstarted pages. A linked active run completes only when original Accepted pages plus Accepted spans
 cover every original character. `CatchUpDeliveryOutboxId` records the acceptance that completed that
 coverage; partial acceptance cannot complete the run, grant approval, or turn original Rejected pages
 into Accepted.
+
+Older Empty windows with deferred sources retain their original hold. The next authenticated
+AllowHistory input with fresh channel context can capture those sources in a new window.
 
 `GetCatchUpProgress(snapshot)` and `GetCatchUpProgressAsync(identity)` use the same union calculation.
 They expose per-event and per-original-page total, accepted and pending character counts, plus

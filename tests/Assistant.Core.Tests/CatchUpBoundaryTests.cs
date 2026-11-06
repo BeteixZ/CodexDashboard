@@ -11,6 +11,8 @@ internal static partial class CommitmentTests
         ("catchup_new_required_notice_needs_explicit_live_qualification", CatchNewDecision),
         ("catchup_expired_source_retires_only_unstarted_page", CatchExpiredSource),
         ("catchup_quiet_does_not_retire_prepared_page", CatchQuietRetained),
+        ("catchup_captured_during_quiet_keeps_one_page_until_quiet_ends", CatchCapturedDuringQuiet),
+        ("catchup_quiet_source_does_not_delay_a_sendable_reminder", CatchMixedQuietSources),
         ("catchup_context_failure_wake_has_independent_delivery_budget", CatchWakeBudget),
         ("catchup_attempted_short_notice_is_not_adopted_by_required_decision", CatchAttemptedShort),
         ("catchup_legacy_approval_classifies_before_batch_or_conflicts_without_write", CatchLegacyApproval),
@@ -91,6 +93,107 @@ internal static partial class CommitmentTests
         var source = await CatchInput(l, f); await l.PrepareCatchUpAsync(Identity, source); f.Clock.UtcNow += TimeSpan.FromMinutes(2);
         Equal(OutboxStage.Pending, (await l.PrepareCatchUpAsync(Identity, source)).Outbox.Single().Stage);
         await l.BeginOutboxSendAsync(Identity, (await CatchReply(l, source)).Id);
+    }
+    private static async Task CatchCapturedDuringQuiet()
+    {
+        await using var f = new F(); var l = await f.Open();
+        f.Clock.UtcNow = new(2026, 10, 21, 17, 59, 0, TimeSpan.Zero);
+        await Reminder(l, f, """{"quietStart":"18:03","quietEnd":"06:00","timeZoneId":"UTC"}""");
+        f.Clock.UtcNow = new(2026, 10, 21, 18, 2, 0, TimeSpan.Zero);
+        await l.AdvanceCommitmentsAsync(Identity);
+        var original = await Finalize(l);
+        f.Clock.UtcNow = new(2026, 10, 21, 18, 4, 0, TimeSpan.Zero);
+        var source = await CatchInput(l, f);
+        var prepared = await l.PrepareCatchUpAsync(Identity, source);
+        Equal(CatchUpWindowStage.Prepared, prepared.Window.Stage);
+        var page = prepared.Outbox.Single();
+        Equal(OutboxStage.Pending, page.Stage);
+        Equal(0, page.SendAttempts);
+        await Error(LedgerErrors.NotificationSuppressed, () => l.BeginOutboxSendAsync(Identity, page.Id));
+        Check(!(await l.GetRecoveryPlanAsync(Identity)).PendingOutbox.Any(x => x.Id == page.Id || x.Id == original.Id));
+        await AcceptDecision(l, await CatchReply(l, source));
+        var quiet = await l.ReadConversationAsync(Identity);
+        Equal(0, quiet.CommitmentBudgetReservations.Length);
+        Equal(0, quiet.Outbox.Single(x => x.Id == page.Id).SendAttempts);
+        await l.DisposeAsync(); l = await f.Open();
+        var reopened = await l.PrepareCatchUpAsync(Identity, source);
+        Equal(prepared.Batch!.Id, reopened.Batch!.Id);
+        Equal(page.Id, reopened.Outbox.Single().Id);
+        Equal(OutboxStage.Pending, reopened.Outbox.Single().Stage);
+        await Error(LedgerErrors.NotificationSuppressed, () => l.BeginOutboxSendAsync(Identity, page.Id));
+        f.Clock.UtcNow = new(2026, 10, 22, 6, 1, 0, TimeSpan.Zero);
+        Check((await l.GetRecoveryPlanAsync(Identity)).PendingOutbox.Any(x => x.Id == page.Id));
+        await AcceptDecision(l, page);
+        var saved = await l.ReadConversationAsync(Identity);
+        var progress = DurableConversationLedger.GetCatchUpProgress(saved).Single();
+        Equal(0, progress.RemainingCharacters);
+        Equal(original.Body.Length, progress.Sources.Single().AcceptedCharacters);
+        Equal(1, saved.CatchUpBatches.Length);
+        Equal(OutboxStage.Accepted, saved.Outbox.Single(x => x.Id == page.Id).Stage);
+        Equal(1, saved.Outbox.Single(x => x.Id == page.Id).SendAttempts);
+        Equal(OutboxStage.Pending, saved.Outbox.Single(x => x.Id == original.Id).Stage);
+        Equal(0, saved.Outbox.Single(x => x.Id == original.Id).SendAttempts);
+        Equal(CommitmentRunStage.Completed, saved.CommitmentRuns.Single().Stage);
+        Equal(TrackedWorkStage.Completed, saved.WorkItems.Single().Stage);
+        Equal(1, saved.CommitmentBudgetReservations.Length);
+        Equal(prepared.Batch.Id, (await l.PrepareCatchUpAsync(Identity, source)).Batch!.Id);
+        Check(!(await l.GetRecoveryPlanAsync(Identity)).PendingOutbox.Any(x => x.Id == page.Id || x.Id == original.Id));
+    }
+    private static async Task CatchMixedQuietSources()
+    {
+        await using var f = new F(); var l = await f.Open();
+        f.Clock.UtcNow = new(2026, 10, 21, 17, 59, 0, TimeSpan.Zero);
+        var quietWork = await Reminder(l, f, """{"quietStart":"18:03","quietEnd":"06:00","timeZoneId":"UTC"}""");
+        var readyArguments = System.Text.Json.Nodes.JsonNode.Parse(ReminderArgs(f.Clock))!;
+        readyArguments["text"] = "合成可发送提醒";
+        var readyWork = await Execute(l, f, "schedule", readyArguments.ToJsonString(), "提醒我合成可发送提醒");
+        f.Clock.UtcNow = new(2026, 10, 21, 18, 2, 0, TimeSpan.Zero);
+        await l.AdvanceCommitmentsAsync(Identity);
+        foreach (var draft in await l.GetPendingCommitmentNotificationsAsync(Identity))
+            await l.FinalizeNotificationFallbackAsync(Identity, draft.Id, draft.ContextBody);
+        var originals = (await l.ReadConversationAsync(Identity)).Outbox.Where(x => x.Kind == OutboxKind.Notification).ToArray();
+        var readyOriginal = originals.Single(x => x.Body == "合成可发送提醒");
+        var quietOriginal = originals.Single(x => x.Id != readyOriginal.Id);
+        f.Clock.UtcNow = new(2026, 10, 21, 18, 4, 0, TimeSpan.Zero);
+        var source = await CatchInput(l, f);
+        var prepared = await l.PrepareCatchUpAsync(Identity, source);
+        var readyPage = prepared.Outbox.Single(x => x.Body.Contains(readyOriginal.Body, StringComparison.Ordinal));
+        await AcceptDecision(l, readyPage);
+        Equal(0, readyPage.SegmentIndex);
+        Check(!readyPage.Body.Contains(quietOriginal.Body, StringComparison.Ordinal));
+        Equal(2, prepared.Outbox.Length);
+        var quietPage = prepared.Outbox.Single(x => x.Id != readyPage.Id);
+        await Error(LedgerErrors.NotificationSuppressed, () => l.BeginOutboxSendAsync(Identity, quietPage.Id));
+        await AcceptDecision(l, await CatchReply(l, source));
+        var duringQuiet = await l.ReadConversationAsync(Identity);
+        Equal(TrackedWorkStage.Completed, duringQuiet.WorkItems.Single(x => x.Id == readyWork.Id).Stage);
+        Equal(TrackedWorkStage.Triggered, duringQuiet.WorkItems.Single(x => x.Id == quietWork.Id).Stage);
+        Equal(0, duringQuiet.Outbox.Single(x => x.Id == quietPage.Id).SendAttempts);
+        foreach (var original in originals)
+        {
+            Equal(OutboxStage.Pending, duringQuiet.Outbox.Single(x => x.Id == original.Id).Stage);
+            Equal(0, duringQuiet.Outbox.Single(x => x.Id == original.Id).SendAttempts);
+        }
+        f.Clock.UtcNow = new(2026, 10, 22, 6, 1, 0, TimeSpan.Zero);
+        Check((await l.GetRecoveryPlanAsync(Identity)).PendingOutbox.Any(x => x.Id == quietPage.Id));
+        await AcceptDecision(l, quietPage);
+        var completed = await l.ReadConversationAsync(Identity);
+        Equal(1, completed.CatchUpBatches.Length);
+        Equal(2, completed.CommitmentBudgetReservations.Length);
+        Check(completed.WorkItems.All(x => x.Stage == TrackedWorkStage.Completed)
+            && completed.CommitmentRuns.All(x => x.Stage == CommitmentRunStage.Completed)
+            && DurableConversationLedger.GetCatchUpProgress(completed).All(x => x.RemainingCharacters == 0));
+        foreach (var page in prepared.Outbox)
+        {
+            Equal(OutboxStage.Accepted, completed.Outbox.Single(x => x.Id == page.Id).Stage);
+            Equal(1, completed.Outbox.Single(x => x.Id == page.Id).SendAttempts);
+        }
+        foreach (var original in originals)
+        {
+            Equal(OutboxStage.Pending, completed.Outbox.Single(x => x.Id == original.Id).Stage);
+            Equal(0, completed.Outbox.Single(x => x.Id == original.Id).SendAttempts);
+        }
+        Equal(prepared.Batch!.Id, (await l.PrepareCatchUpAsync(Identity, source)).Batch!.Id);
     }
     private static async Task CatchWakeBudget()
     {

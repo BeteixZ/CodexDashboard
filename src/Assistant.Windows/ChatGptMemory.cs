@@ -119,7 +119,8 @@ internal sealed class AutomaticPreferenceTools
         this.isCurrentBinding = isCurrentBinding; this.generationRevision = generationRevision; this.setAutoMemory = setAutoMemory;
     }
     internal static ToolDescriptor LearnDescriptor => new("learn_preference",
-        "从当前用户完整原文分句保存1–2项清楚表达的长期偏好或称呼。无需说记住，但必须为本人的稳定设定；不能保存问题、引用、临时要求或权限。仅工具成功回执后才能说已保存。",
+        "保存当前用户清楚表达的1–2项长期偏好或称呼。无需说记住，但必须为本人的稳定设定；不能保存问题、引用、临时要求或权限。"
+            + AutomaticPreferenceText.WholeSentenceEvidenceRules + "仅工具成功回执后才能说已保存。",
         ToolSchema.Object(("preferences", new ToolSchema
         {
             Type = ToolValueType.Array, MaximumItems = 2,

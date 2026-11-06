@@ -42,7 +42,8 @@ internal sealed partial class ChatGptAssistant : IToolModel
         + "根据来源说明当时说过什么，不把检索命中当作独立验证或当前授权；缺少记录就直说，不能编造共同经历。需要现在的任务状态时另查任务。"
         + "启用learn_preference时，用户清楚表达自己的长期表达偏好或称呼即可提出保存，不要求说“记住”。"
         + "聊天中是否先倾听、何时给建议属于conversation_advice，是否追问或在结尾反问属于conversation_questions；反问不是复述，conversation_repetition只表示是否复述用户原话，tone只表示语气，这些方面互不覆盖；workflow用于工作步骤，不用于这种聊天习惯。用户修改同一聊天习惯时，保存包含条件的完整新原文，不能只保留‘给建议’而丢掉‘明确问怎么办时’。"
-        + "每条输入最多调用一次learn_preference，preferences含1–2项key/evidence；evidence逐字保留当前原文的完整独立分句及适用范围。"
+        + "每条输入最多调用一次learn_preference，preferences含1–2项key/evidence。"
+        + AutomaticPreferenceText.WholeSentenceEvidenceRules
         + "assistant_name是助手昵称或人设，user_name是对用户的称呼，不能互换；“你叫什么”是问题，不能当新命名。"
         + "用户纠正长期称呼或明确以后不用昵称时，仍用learn_preference保存完整纠正句，包括否定和新称呼，不删掉限定语；改用户称呼用user_name，改助手名字用assistant_name，同类偏好会替换旧项。只有用户明确要求编辑或删除记忆记录时才使用update_memory或forget，不把普通称呼纠正变成要求抄记忆编号。"
         + "只保存明确稳定的偏好；不保存引用、代码、假设、临时要求、敏感信息、任务进度或操作权限，不能删去限定语再保存。"

@@ -147,6 +147,76 @@ internal static class AutomaticPreferenceToolTests
                 && f.TransportCalls == 0 && !File.ReadAllText(f.Memory.DataPath!).Contains("我更喜欢分行", StringComparison.Ordinal));
             Require(new AssistantMemoryStore(f.MemoryRoot, f.Profile).Entries.Single() == f.Memory.Entries.Single());
         });
+        await Check("actual_comma_fragments_rejected_and_shared_whole_sentence_saves_once", async () =>
+        {
+            const string source = "以后回答控制在三句以内，不要追问。";
+            await using (var rejected = await New())
+            {
+                string stamp = rejected.Memory.Capture().Stamp;
+                var result = await rejected.RunHttp(source, [Call("learn_preference", new { preferences = new[]
+                {
+                    new { key = "detail_level", evidence = "以后回答控制在三句以内" },
+                    new { key = "conversation_questions", evidence = "不要追问" }
+                } })]);
+                var saved = await rejected.Read();
+                Require(result.Result.State == ToolLoopState.NeedsConfirmation
+                    && rejected.Memory.Capture().Stamp == stamp && rejected.Memory.Entries.Count == 0
+                    && saved.Authorizations.IsEmpty && saved.Operations.IsEmpty
+                    && saved.ToolInvocations.Single().Stage == ToolInvocationStage.NeedsConfirmation
+                    && result.Result.Outbox.Any(item => item.Body.Contains("没能保存到长期记忆", StringComparison.Ordinal))
+                    && rejected.TransportCalls == 0);
+            }
+            await using var accepted = await New();
+            var whole = await accepted.RunHttp(source, [Call("learn_preference", new { preferences = new[]
+            {
+                new { key = "detail_level", evidence = source }, new { key = "conversation_questions", evidence = source }
+            } })]);
+            var state = await accepted.Read();
+            var entry = accepted.Memory.Entries.Single();
+            using var receipt = JsonDocument.Parse(state.ToolInvocations.Single().ResultJson!);
+            var rows = receipt.RootElement.GetProperty("facts").GetProperty("saved").EnumerateArray().ToArray();
+            Require(whole.Result.State == ToolLoopState.Completed && entry.Text == source
+                && entry.PreferenceKey == "detail_level" && entry.Origin == "automatic"
+                && rows.Length == 2 && rows.All(row => row.GetProperty("evidence").GetString() == source
+                    && row.GetProperty("memoryId").GetString() == entry.Id)
+                && rows.Select(row => row.GetProperty("key").GetString()).ToHashSet().SetEquals(["detail_level", "conversation_questions"])
+                && state.Authorizations.Single().SourceExcerpt == source && state.Operations.Single().Stage == OperationStage.Completed
+                && new AssistantMemoryStore(accepted.MemoryRoot, accepted.Profile).Entries.Single() == entry);
+        });
+        await Check("whole_preference_sentence_beside_work_keeps_work_out_of_saved_evidence", async () =>
+        {
+            await using var f = await New();
+            const string preference = "以后汇报先说结论。";
+            const string source = "继续测试。" + preference;
+            var result = await f.RunHttp(source, [Learn(preference, "report_order")]);
+            var state = await f.Read();
+            Require(result.Result.State == ToolLoopState.Completed && f.Memory.Entries.Single().Text == preference
+                && state.Authorizations.Single().SourceExcerpt == source
+                && state.Operations.Single().Action == "learn_preference"
+                && state.Operations.Single().Stage == OperationStage.Completed && f.TransportCalls == 0);
+        });
+        await Check("actual_model_request_and_tool_contract_require_same_whole_comma_sentence", async () =>
+        {
+            await using var f = await New();
+            var result = await f.RunHttp("我更喜欢分行", [Learn("我更喜欢分行")]);
+            string instructions = result.Request.GetProperty("instructions").GetString()!;
+            var input = result.Request.GetProperty("input").EnumerateArray();
+            string structured = input.Single(item => item.GetProperty("role").GetString() == "user"
+                && item.GetProperty("content").GetString()!.StartsWith('{')).GetProperty("content").GetString()!;
+            using var context = JsonDocument.Parse(structured);
+            var descriptor = context.RootElement.GetProperty("availableTools").EnumerateArray()
+                .Single(item => item.GetProperty("name").GetString() == "learn_preference");
+            string description = descriptor.GetProperty("description").GetString()!;
+            bool WholeSentence(string text) => text.Contains("逗号连接", StringComparison.Ordinal)
+                && text.Contains("两项", StringComparison.Ordinal) && text.Contains("同一完整原句", StringComparison.Ordinal)
+                && text.Contains("原有标点", StringComparison.Ordinal);
+            if (!WholeSentence(instructions)) throw new InvalidOperationException("model_instructions_omit_whole_sentence_contract");
+            if (!WholeSentence(description)) throw new InvalidOperationException("tool_description_omits_whole_sentence_contract");
+            var preferences = descriptor.GetProperty("parameters").GetProperty("properties").GetProperty("preferences");
+            Require(preferences.GetProperty("maxItems").GetInt32() == 2
+                && preferences.GetProperty("items").GetProperty("properties").GetProperty("evidence").GetProperty("maxLength").GetInt32() == 400
+                && result.Result.State == ToolLoopState.Completed);
+        });
         await Check("advice_correction_preserves_independent_tone", async () =>
         {
             await using var f = await New();

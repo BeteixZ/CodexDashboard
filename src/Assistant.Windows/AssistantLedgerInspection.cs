@@ -85,7 +85,7 @@ internal static class AssistantLedgerInspection
             for (var directory = new DirectoryInfo(path); directory != null; directory = directory.Parent)
                 if ((directory.Attributes & FileAttributes.ReparsePoint) != 0) throw new IOException("Linked paths are unsupported.");
         using var lease = new FileStream(Path.Combine(source, ".codex-migration.lock"), FileMode.Open, FileAccess.Read, FileShare.None);
-        if (requireHold && !File.Exists(Path.Combine(source, Codex.Migration.MigrationStartup.RecoveryHoldName)))
+        if (requireHold && !Codex.Migration.MigrationStartup.IsHeldForRecovery(source))
             throw new InvalidOperationException("Recovery review requires a held copy.");
         if (new DirectoryInfo(source).EnumerateFileSystemInfos("*", SearchOption.AllDirectories)
             .Any(item => (item.Attributes & FileAttributes.ReparsePoint) != 0)) throw new IOException("Linked data is unsupported.");
@@ -139,7 +139,7 @@ internal static class AssistantLedgerInspection
         var report = new { version = 6, scope = "conversation-ledger-and-memory-documents", restoreAuthorized = false,
             snapshotFingerprint = new { algorithm = "sha256-relative-file-manifest-v1", fingerprint.Sha256,
                 fingerprint.FileCount, fingerprint.Bytes, excludes = new[] { ".codex-migration.lock", "empty-directories" } },
-            recoveryHoldPresent = File.Exists(Path.Combine(source, Codex.Migration.MigrationStartup.RecoveryHoldName)),
+            recoveryHoldPresent = Codex.Migration.MigrationStartup.IsHeldForRecovery(source),
             inspectedAtUtc = DateTimeOffset.UtcNow, conversations, memories, reconciliationRecords,
             limitations = new[] { "No backend reconciliation performed.", "Credentials, rule text and other sidecar configuration were hashed as stored bytes, not decoded or validated.",
                 "The snapshot fingerprint is not a signature, legacy-process exclusion proof or permission to restore.",

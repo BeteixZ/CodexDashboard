@@ -49,8 +49,9 @@ public sealed class MigrationEngine(ILegacyReceiverGuard? guard = null, IMigrati
             bool activated = File.Exists(SafePaths.Under(request.TargetDirectory, MigrationStartup.ActivationName));
             if (journal == null)
                 return new(false, null, activated, false, RollbackAssessment.NoTransaction, "no_transaction");
-            bool startup = journal.Phase == MigrationPhase.Completed
-                && MarkerMatches(request.TargetDirectory, journal.Id, "ready");
+            bool startup = journal.Phase == MigrationPhase.Completed && !request.PauseTargetServices
+                && MarkerMatches(request.TargetDirectory, journal.Id, "ready")
+                && MigrationStartup.CanStart(request.TargetDirectory);
             var rollback = activated ? RollbackAssessment.RequiresReconciliation : journal.Phase switch
             {
                 MigrationPhase.Completed or MigrationPhase.Published => RollbackAssessment.NeedsReceiverGuardAndIntegrityCheck,
@@ -106,7 +107,8 @@ public sealed class MigrationEngine(ILegacyReceiverGuard? guard = null, IMigrati
                 journal ??= Begin(request);
                 await ForwardCoreAsync(journal, lease, cancellation);
             }
-            return new(journal.Phase, true, journal.Phase == MigrationPhase.Completed, "ok", journal.TargetFiles.Count);
+            return new(journal.Phase, true, journal.Phase == MigrationPhase.Completed
+                && !request.PauseTargetServices && MigrationStartup.CanStart(request.TargetDirectory), "ok", journal.TargetFiles.Count);
         }
         catch (Exception ex) when (ex is MigrationFailure or IOException or UnauthorizedAccessException
             or JsonException or ArgumentException or InvalidOperationException or OperationCanceledException)
@@ -157,13 +159,21 @@ public sealed class MigrationEngine(ILegacyReceiverGuard? guard = null, IMigrati
         CancellationToken cancellation)
     {
         var request = journal.Request;
+        string startupState = request.PauseTargetServices ? MigrationStartup.RecoveryHeldState : "ready";
         if (journal.Phase is MigrationPhase.RolledBack or MigrationPhase.RollbackDisablingTarget or MigrationPhase.RollbackRestoringSource)
             throw new MigrationFailure("rollback_transaction_cannot_migrate");
+        // Repair old paused transactions before payload validation can fail. The
+        // guard remains responsible for receiver exclusion while metadata changes.
+        if (request.PauseTargetServices && MarkerMatches(request.TargetDirectory, journal.Id, "ready"))
+        {
+            await CheckLeaseAsync(lease, cancellation);
+            WriteMarker(request.TargetDirectory, journal.Id, startupState);
+        }
         if (journal.Phase == MigrationPhase.Completed)
         {
             // Idempotent completion must not copy or overwrite data the new assistant has since added.
             VerifyDisabled(request.SourceDirectory, journal.SourceFiles, journal.SanitizedSourceHash);
-            if (!MarkerMatches(request.TargetDirectory, journal.Id, "ready")) throw new MigrationFailure("activation_marker_mismatch");
+            RequireMarker(request.TargetDirectory, journal.Id, startupState);
             return;
         }
         await CheckLeaseAsync(lease, cancellation);
@@ -237,9 +247,9 @@ public sealed class MigrationEngine(ILegacyReceiverGuard? guard = null, IMigrati
             VerifyDisabled(request.SourceDirectory, journal.SourceFiles, journal.SanitizedSourceHash);
             VerifySet(request.TargetDirectory, journal.TargetFiles, PayloadFiles(request.TargetDirectory));
             if (!MarkerMatches(request.TargetDirectory, journal.Id, "pending")
-                && !MarkerMatches(request.TargetDirectory, journal.Id, "ready"))
+                && !MarkerMatches(request.TargetDirectory, journal.Id, startupState))
                 throw new MigrationFailure("activation_marker_mismatch");
-            WriteMarker(request.TargetDirectory, journal.Id, "ready");
+            WriteMarker(request.TargetDirectory, journal.Id, startupState);
             faults?.At("activation_released");
             Change(journal, MigrationPhase.Completed);
         }

@@ -36,8 +36,20 @@ internal sealed class MigrationPreviewModel
             var request = new MigrationRequest(source, Path.GetFullPath(input.TargetDirectory),
                 Path.GetFullPath(input.TransactionDirectory));
             var engine = new MigrationEngine(); // The default production guard remains deny.
-            var plan = engine.Plan(request);
             var inspection = engine.Inspect(request);
+            if (inspection.Code == "journal_identity_mismatch")
+            {
+                // Read the paused variant only after the ordinary request failed
+                // identity matching. The engine still checks every explicit path.
+                var pausedRequest = request with { PauseTargetServices = true };
+                var pausedInspection = engine.Inspect(pausedRequest);
+                if (pausedInspection.TransactionExists && pausedInspection.Rollback != RollbackAssessment.Unverified)
+                {
+                    request = pausedRequest;
+                    inspection = pausedInspection;
+                }
+            }
+            var plan = engine.Plan(request);
             if (!inspection.TransactionExists && ContainsPayload(request.TargetDirectory))
                 return Error("target_not_empty", "新助手目录已有数据，请选择空目录；不能把现有账户合并覆盖。");
             if (!inspection.TransactionExists && ContainsPayload(request.TransactionDirectory))
@@ -52,6 +64,8 @@ internal sealed class MigrationPreviewModel
             }.Where(c => c.Count > 0).ToArray();
             bool valid = inspection.Rollback != RollbackAssessment.Unverified && plan.RelativeFiles.Contains("settings.json");
             string summary = !valid ? "目录或事务记录还不能核实，请保留原文件并核对所选位置。"
+                : inspection.TransactionExists && request.PauseTargetServices
+                    ? "已找到要求暂停服务的恢复事务。这里只展示记录的阶段；执行前仍需停机与完整性核对。"
                 : inspection.TransactionExists ? "已找到迁移事务。这里只展示记录的阶段；执行前仍需停机与完整性核对。"
                 : $"找到 {plan.RelativeFiles.Count} 个可迁移文件，共 {plan.TotalBytes:N0} 字节。当前仅提供检查，正式交接尚未开放。";
             return new(valid, valid ? inspection.Code : "migration_preview_unverified", summary, source,

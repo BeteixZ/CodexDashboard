@@ -126,6 +126,88 @@ await Test("completed migration is idempotent and preserves new target data", as
     Require(repeat.Succeeded && File.ReadAllText(f.Target("task-control.state")) == "new journal with completed operation");
     Require(File.ReadAllText(f.Target("new-conversation.state")) == "new messages");
 });
+await Test("paused recovery blocks runtime before configuration and survives retry", async f =>
+{
+    var request = f.Request with { PauseTargetServices = true };
+    var engine = new MigrationEngine(new Guard());
+    var result = await engine.MigrateAsync(request);
+    Require(result.Succeeded && !result.ActivationAllowed && !engine.Inspect(request).StartupAllowed
+        && !MigrationStartup.CanStart(request.TargetDirectory) && MigrationStartup.IsHeldForRecovery(request.TargetDirectory));
+    byte[] payload = File.ReadAllBytes(f.Target("task-control.state"));
+    bool blocked = false;
+    try { using var runtime = MigrationStartup.AcquireRuntimeLease(request.TargetDirectory); }
+    catch (InvalidOperationException) { blocked = true; }
+    Require(blocked && !File.Exists(f.Target(".codex-migration-activated.json")));
+    Require((await engine.MigrateAsync(request)).Succeeded
+        && !MigrationStartup.CanStart(request.TargetDirectory) && MigrationStartup.IsHeldForRecovery(request.TargetDirectory)
+        && File.ReadAllBytes(f.Target("task-control.state")).SequenceEqual(payload));
+});
+foreach (string point in new[] { "phase:Published", "activation_released", "phase:Completed" })
+    await Test("paused recovery remains blocked across publication crash: " + point, async f =>
+    {
+        var request = f.Request with { PauseTargetServices = true };
+        await ExpectCrash(() => new MigrationEngine(new Guard(), new CrashAt(point)).MigrateAsync(request));
+        Require(!MigrationStartup.CanStart(request.TargetDirectory));
+        var result = await new MigrationEngine(new Guard()).MigrateAsync(request);
+        Require(result.Succeeded && !result.ActivationAllowed && !MigrationStartup.CanStart(request.TargetDirectory));
+    });
+await Test("old completed paused journal is inspected without writes and held on guarded retry", async f =>
+{
+    var request = f.Request with { PauseTargetServices = true };
+    var engine = new MigrationEngine(new Guard());
+    Require((await engine.MigrateAsync(request)).Succeeded);
+    // Older paused transactions published the same ready marker as normal migration.
+    string markerPath = f.Target(".codex-migration.json");
+    var oldMarker = JsonNode.Parse(File.ReadAllText(markerPath))!;
+    oldMarker["State"] = "ready";
+    File.WriteAllText(markerPath, oldMarker.ToJsonString());
+    MigrationStartup.RecordActivation(request.TargetDirectory);
+    File.WriteAllText(f.Target("task-control.state"), "new target operation recorded after old startup");
+    File.WriteAllText(f.Target("new-conversation.state"), "new target messages");
+    byte[] sourceSettings = File.ReadAllBytes(f.Source("settings.json"));
+    byte[] targetSettings = File.ReadAllBytes(f.Target("settings.json"));
+    byte[] markerBefore = File.ReadAllBytes(markerPath);
+    var inspection = engine.Inspect(request);
+    Require(!inspection.StartupAllowed && inspection.Rollback == RollbackAssessment.RequiresReconciliation
+        && File.ReadAllBytes(markerPath).SequenceEqual(markerBefore));
+    var result = await engine.MigrateAsync(request);
+    Require(result.Succeeded && !result.ActivationAllowed && !MigrationStartup.CanStart(request.TargetDirectory)
+        && File.ReadAllBytes(f.Source("settings.json")).SequenceEqual(sourceSettings)
+        && File.ReadAllBytes(f.Target("settings.json")).SequenceEqual(targetSettings)
+        && File.ReadAllText(f.Target("task-control.state")) == "new target operation recorded after old startup"
+        && File.ReadAllText(f.Target("new-conversation.state")) == "new target messages");
+    Require((await engine.RollbackAsync(request)).Code == "rollback_requires_reconciliation_after_activation");
+});
+await Test("paused recovery before activation can roll back without releasing target", async f =>
+{
+    var request = f.Request with { PauseTargetServices = true };
+    var engine = new MigrationEngine(new Guard());
+    Require((await engine.MigrateAsync(request)).Succeeded);
+    var result = await engine.RollbackAsync(request);
+    Require(result.Succeeded && result.Phase == MigrationPhase.RolledBack
+        && !MigrationStartup.CanStart(request.TargetDirectory)
+        && File.ReadAllBytes(f.Source("settings.json")).SequenceEqual(f.OriginalSettings)
+        && File.ReadAllBytes(f.Source("task-control.state")).SequenceEqual(f.OriginalQueue));
+});
+foreach (bool completed in new[] { false, true })
+    await Test("old paused publication is held even when reconciliation is required: completed=" + completed, async f =>
+    {
+        var request = f.Request with { PauseTargetServices = true };
+        if (completed)
+            Require((await new MigrationEngine(new Guard()).MigrateAsync(request)).Succeeded);
+        else
+            await ExpectCrash(() => new MigrationEngine(new Guard(), new CrashAt("activation_released")).MigrateAsync(request));
+        string markerPath = f.Target(".codex-migration.json");
+        var oldMarker = JsonNode.Parse(File.ReadAllText(markerPath))!;
+        oldMarker["State"] = "ready";
+        File.WriteAllText(markerPath, oldMarker.ToJsonString());
+        string changed = completed ? f.Source("task-control.state") : f.Target("task-control.state");
+        File.WriteAllText(changed, "new operation requiring reconciliation");
+        var result = await new MigrationEngine(new Guard()).MigrateAsync(request);
+        Require(!result.Succeeded && !result.ActivationAllowed
+            && !MigrationStartup.CanStart(request.TargetDirectory)
+            && File.ReadAllText(changed) == "new operation requiring reconciliation");
+    });
 await Test("preexisting target is never overwritten", async f =>
 {
     Directory.CreateDirectory(f.Request.TargetDirectory);
@@ -387,6 +469,11 @@ await Test("pending corrupt and future markers fail closed", f =>
     Require(!MigrationStartup.CanStart(f.Request.TargetDirectory));
     File.WriteAllText(marker, """{"Version":99,"TransactionId":"test","State":"ready"}""");
     Require(!MigrationStartup.CanStart(f.Request.TargetDirectory));
+    Require(!MigrationStartup.IsHeldForRecovery(f.Request.TargetDirectory));
+    File.WriteAllText(marker, JsonSerializer.Serialize(new { Version = 1, TransactionId = Guid.NewGuid().ToString("N"), State = "recovery-held" }));
+    Require(!MigrationStartup.CanStart(f.Request.TargetDirectory) && MigrationStartup.IsHeldForRecovery(f.Request.TargetDirectory));
+    File.WriteAllText(marker, """{"Version":1,"TransactionId":"not-a-transaction","State":"recovery-held"}""");
+    Require(!MigrationStartup.CanStart(f.Request.TargetDirectory) && !MigrationStartup.IsHeldForRecovery(f.Request.TargetDirectory));
     return Task.CompletedTask;
 });
 await Test("runtime lease blocks migration until the assistant exits", async f =>
@@ -533,6 +620,42 @@ if (OperatingSystem.IsWindows())
         var result = new MigrationPreviewModel().Evaluate(new(f.Request.SourceDirectory, f.Request.TargetDirectory, f.Request.TransactionDirectory));
         Require(result.Valid && result.Inspection!.Rollback == RollbackAssessment.RequiresReconciliation
             && result.RollbackDetail.Contains("对账") && !JsonSerializer.Serialize(result).Contains(Fixture.Secret));
+    });
+    await Test("preview recognizes a paused recovery transaction without changing files", async f =>
+    {
+        var request = f.Request with { PauseTargetServices = true };
+        Require((await new MigrationEngine(new Guard()).MigrateAsync(request)).Succeeded);
+        var before = Directory.GetFiles(f.Root, "*", SearchOption.AllDirectories).Order()
+            .ToDictionary(path => path, File.ReadAllBytes);
+        var result = new MigrationPreviewModel().Evaluate(new(request.SourceDirectory, request.TargetDirectory, request.TransactionDirectory));
+        Require(result.Valid && result.Plan!.Request.PauseTargetServices
+            && result.Inspection is { TransactionExists: true, StartupAllowed: false, Phase: MigrationPhase.Completed }
+            && result.Summary.Contains("暂停") && !MigrationStartup.CanStart(request.TargetDirectory));
+        var after = Directory.GetFiles(f.Root, "*", SearchOption.AllDirectories).Order().ToArray();
+        Require(before.Keys.SequenceEqual(after) && before.All(file => File.ReadAllBytes(file.Key).SequenceEqual(file.Value)));
+    });
+    await Test("paused recovery preview rejects each mismatching explicit directory without writes", async f =>
+    {
+        var request = f.Request with { PauseTargetServices = true };
+        Require((await new MigrationEngine(new Guard()).MigrateAsync(request)).Succeeded);
+        string source = Path.Combine(f.Root, "other-source"), target = Path.Combine(f.Root, "other-target"),
+            transaction = Path.Combine(f.Root, "other-transaction");
+        Directory.CreateDirectory(source); Directory.CreateDirectory(target); Directory.CreateDirectory(transaction);
+        File.Copy(f.Source("settings.json"), Path.Combine(source, "settings.json"));
+        File.Copy(Path.Combine(request.TransactionDirectory, "journal.json"), Path.Combine(transaction, "journal.json"));
+        var before = Directory.GetFiles(f.Root, "*", SearchOption.AllDirectories).Order()
+            .ToDictionary(path => path, File.ReadAllBytes);
+        foreach (var input in new[] {
+            new MigrationPreviewRequest(source, request.TargetDirectory, request.TransactionDirectory),
+            new MigrationPreviewRequest(request.SourceDirectory, target, request.TransactionDirectory),
+            new MigrationPreviewRequest(request.SourceDirectory, request.TargetDirectory, transaction)
+        })
+        {
+            var result = new MigrationPreviewModel().Evaluate(input);
+            Require(!result.Valid && result.Inspection!.Code == "journal_identity_mismatch");
+        }
+        var after = Directory.GetFiles(f.Root, "*", SearchOption.AllDirectories).Order().ToArray();
+        Require(before.Keys.SequenceEqual(after) && before.All(file => File.ReadAllBytes(file.Key).SequenceEqual(file.Value)));
     });
 }
 Console.WriteLine($"Completed {results.Count} checks; failures={failed}; synthetic data only.");

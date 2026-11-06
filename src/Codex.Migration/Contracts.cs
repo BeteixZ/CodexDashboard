@@ -8,7 +8,8 @@ public enum MigrationPhase
 
 public enum MigrationDirection { Forward, Rollback }
 
-/// <summary>All directories must be explicitly selected, absolute, distinct and non-overlapping.</summary>
+/// <summary>All directories must be explicitly selected, absolute, distinct and non-overlapping.
+/// A paused target remains blocked before normal startup, including after completion and retry.</summary>
 public sealed record MigrationRequest(string SourceDirectory, string TargetDirectory, string TransactionDirectory,
     bool PauseTargetServices = false);
 

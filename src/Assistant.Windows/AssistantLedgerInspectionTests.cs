@@ -138,7 +138,13 @@ internal static class AssistantLedgerInspectionTests
                 var pendingHandoff = await ReviewedRecoveryHandoff.ExecuteAsync(pendingRequest,
                     reviewReport.GetProperty("snapshotFingerprint").GetProperty("Sha256").GetString()!, new SyntheticReceiverGuard());
                 Check($"{archived}: reviewed pending work is preserved without activation", pendingHandoff.Succeeded && !pendingHandoff.ActivationAllowed
+                    && !Codex.Migration.MigrationStartup.CanStart(pendingRequest.TargetDirectory)
                     && File.ReadAllBytes(Path.Combine(source, "conversations.state")).SequenceEqual(File.ReadAllBytes(Path.Combine(pendingRequest.TargetDirectory, "conversations.state"))));
+                var heldTargetReport = await AssistantLedgerInspection.ReadAsync(pendingRequest.TargetDirectory, requireHold: true);
+                Check($"{archived}: handed off target remains available for offline review",
+                    heldTargetReport.GetProperty("recoveryHoldPresent").GetBoolean()
+                    && !heldTargetReport.GetProperty("restoreAuthorized").GetBoolean()
+                    && !heldTargetReport.GetRawText().Contains("PRIVATE_"));
                 await using (var copied = await AssistantLedgerStorage.OpenAsync(pendingRequest.TargetDirectory, false, inspection: true))
                 {
                     var preserved = await copied.ReadConversationAsync(identity);
@@ -189,7 +195,9 @@ internal static class AssistantLedgerInspectionTests
                 && !Directory.Exists(request.TargetDirectory));
             var handoff = await ReviewedRecoveryHandoff.ExecuteAsync(request, fingerprint, new SyntheticReceiverGuard());
             Check("reviewed quiescent handoff publishes latest state to new directory", handoff.Succeeded && !handoff.ActivationAllowed
-                && Codex.Migration.MigrationStartup.CanStart(request.TargetDirectory) && !Codex.Migration.MigrationStartup.CanStart(handoffSource));
+                && !Codex.Migration.MigrationStartup.CanStart(request.TargetDirectory)
+                && Codex.Migration.MigrationStartup.IsHeldForRecovery(request.TargetDirectory)
+                && !Codex.Migration.MigrationStartup.CanStart(handoffSource));
             using (var targetSettings = JsonDocument.Parse(File.ReadAllText(Path.Combine(request.TargetDirectory, "settings.json"))))
                 Check("recovery opens with channels model and control off while retaining binding", !targetSettings.RootElement.GetProperty("weChat").GetProperty("clawBotEnabled").GetBoolean()
                     && !targetSettings.RootElement.GetProperty("chatGpt").GetProperty("enabled").GetBoolean()

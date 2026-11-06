@@ -137,6 +137,7 @@ public static class MigrationStartup
     internal const string MarkerName = ".codex-migration.json";
     internal const string ActivationName = ".codex-migration-activated.json";
     internal const string LockName = ".codex-migration.lock";
+    internal const string RecoveryHeldState = "recovery-held";
     public const string RecoveryHoldName = ".codex-recovery-hold.json";
 
     /// <summary>Persistently blocks cooperating hosts before configuration or receiver startup.
@@ -158,16 +159,35 @@ public static class MigrationStartup
         try
         {
             if (File.Exists(SafePaths.Under(SafePaths.Absolute(dataDirectory), RecoveryHoldName))) return false;
-            var path = SafePaths.Under(SafePaths.Absolute(dataDirectory), MarkerName);
-            if (!File.Exists(path)) return true; // Fresh installation.
-            byte[] bytes = SafePaths.Read(path, 4096);
-            _ = SettingsTransfer.Read(bytes);
-            var marker = JsonSerializer.Deserialize<StartupMarker>(bytes);
-            return marker is { Version: 1, State: "ready" }
-                && Guid.TryParseExact(marker.TransactionId, "N", out _);
+            return ReadMarker(SafePaths.Absolute(dataDirectory)) is null or { State: "ready" };
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException
             or MigrationFailure or ArgumentException) { return false; }
+    }
+
+    /// <summary>Recognizes both prepared backup copies and persistently held recovery handoffs.</summary>
+    public static bool IsHeldForRecovery(string dataDirectory)
+    {
+        try
+        {
+            string directory = SafePaths.Absolute(dataDirectory);
+            return File.Exists(SafePaths.Under(directory, RecoveryHoldName))
+                || ReadMarker(directory) is { State: RecoveryHeldState };
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException
+            or MigrationFailure or ArgumentException) { return false; }
+    }
+
+    private static StartupMarker? ReadMarker(string directory)
+    {
+        string path = SafePaths.Under(directory, MarkerName);
+        if (!File.Exists(path)) return null;
+        byte[] bytes = SafePaths.Read(path, 4096);
+        _ = SettingsTransfer.Read(bytes);
+        var marker = JsonSerializer.Deserialize<StartupMarker>(bytes);
+        if (marker is not { Version: 1 } || !Guid.TryParseExact(marker.TransactionId, "N", out _))
+            throw new MigrationFailure("invalid_startup_marker");
+        return marker;
     }
 
     /// <summary>

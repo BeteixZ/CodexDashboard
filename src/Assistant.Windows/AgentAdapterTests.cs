@@ -90,6 +90,26 @@ internal static class AgentAdapterTests
                     !inputRoot.GetProperty("latestAuthenticatedInput").GetProperty("currentAuthorization").GetBoolean()
                     && !inputRoot.GetProperty("toolObservations")[0].GetProperty("currentAuthorization").GetBoolean());
             }
+            var sentLocal = new DateTime(2026, 12, 31, 23, 59, 58, DateTimeKind.Unspecified);
+            var sentAt = new DateTimeOffset(sentLocal, TimeZoneInfo.Local.GetUtcOffset(sentLocal));
+            var receivedAt = sentAt.AddSeconds(4);
+            var delayedInput = createInput with { Body = "明天去图书馆", OccurredAt = sentAt, ReceivedAt = receivedAt };
+            var delayedEvent = new ConversationEvent(Guid.NewGuid(), identity, ConversationSource.TrustedUser,
+                delayedInput.Body, sentAt, receivedAt, delayedInput.Revision, delayedInput.SourceMessageId);
+            using (var delayedDocument = JsonDocument.Parse(ChatGptAssistant.BuildToolInput(createRequest with
+            {
+                CurrentMessage = delayedInput, Context = [delayedEvent]
+            })))
+            {
+                var current = delayedDocument.RootElement.GetProperty("currentUserMessage");
+                var historical = delayedDocument.RootElement.GetProperty("conversationEvents")[0];
+                Check("midnight_delivery_keeps_current_and_history_relative_dates_consistent",
+                    current.GetProperty("relativeDateInterpretations")[0].GetProperty("Date").GetString() == "2027-01-01"
+                    && historical.GetProperty("relativeDateInterpretations")[0].GetProperty("Date").GetString() == "2027-01-01");
+                Check("model_input_preserves_original_and_receipt_timestamps",
+                    current.GetProperty("occurredAt").GetDateTimeOffset() == sentAt
+                    && current.GetProperty("receivedAt").GetDateTimeOffset() == receivedAt);
+            }
             Check("explicit_create_discovers_without_model_confirmation", OwnedCreationCommand.Resolve(createRequest)?.Calls.Single().Name == "list_owned_tasks");
             var listing = new ModelToolObservation("catalogue", "list_owned_tasks", JsonSerializer.Serialize(new { status = "readonlysuccess", facts = new {
                 completeCatalogue = true, page = new { totalPages = 1 },

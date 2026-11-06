@@ -362,6 +362,7 @@ internal sealed partial class AssistantMemoryStore
     internal static bool CanReplacePersonalPreference(AssistantMemoryEntry entry, string key)
         => entry.Origin == "automatic"
             && !(entry.PreferenceKey is "tone" or "conversation_advice" or "conversation_repetition" or "conversation_questions" && AutomaticPreferenceText.IsMixedDialoguePreference(entry.Text))
+            && !(entry.PreferenceKey is "tone" or "detail_level" && AutomaticPreferenceText.IsMixedToneAndDetailPreference(entry.Text))
             && !AutomaticPreferenceText.IsMixedLanguagePreference(entry.Text, entry.PreferenceKey)
             && (entry.PreferenceKey == "tone" && AutomaticPreferenceText.IsLegacyAdvicePreference(entry.Text)
                 ? AutomaticPreferenceText.PreferenceKey("conversation_advice", entry.Text) : AutomaticPreferenceText.PreferenceKey(entry.PreferenceKey, entry.Text)) == key && (entry.Metadata == null

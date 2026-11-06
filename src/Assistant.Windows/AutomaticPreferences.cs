@@ -181,6 +181,10 @@ internal static class AutomaticPreferenceText
             ? expressionKeys.Any(other => StableDeclaration(new(other, text)))
             : expressionKeys.Contains(key) && StableDeclaration(new(key, text));
     }
+    internal static bool IsMixedToneAndDetailPreference(string text) =>
+        StableDeclaration(new("detail_level", text))
+        // "简短" alone describes length. Require a separate tone cue.
+        && Regex.IsMatch(text, @"语气|口吻|风格|自然|直接|直来直去|温柔|严肃|客气|亲切|熟人|委婉", RegexOptions.CultureInvariant);
     private static bool StableDeclaration(AutomaticPreference preference)
     {
         string text = preference.Evidence;

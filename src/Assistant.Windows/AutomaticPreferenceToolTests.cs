@@ -195,6 +195,36 @@ internal static class AutomaticPreferenceToolTests
                 && reopened.Entries.Any(e => e.Text == "以后我明确问怎么办时再给建议。")
                 && !reopened.Entries.Any(e => e.Text == "以后语气直接一点。"));
         });
+        await Check("mixed_tone_and_length_survive_independent_corrections_and_reopen", async () =>
+        {
+            foreach (string originalKey in new[] { "tone", "detail_level" })
+            {
+                await using var f = await New();
+                const string original = "以后语气温柔一点，回答控制在三句以内。";
+                string otherKey = originalKey == "tone" ? "detail_level" : "tone";
+                var result = await f.Run(original, [Call("learn_preference", new
+                {
+                    preferences = new[] { new { key = originalKey, evidence = original }, new { key = otherKey, evidence = original } }
+                })]);
+                Require(result.State == ToolLoopState.Completed && f.Memory.Entries.Single().Text == original);
+                var mixed = f.Memory.Entries.Single();
+                async Task Save(string key, string text) => await f.Run(text, [Learn(text, key)]);
+                await Save("tone", "以后语气直接一点。");
+                await Save("detail_level", "以后回答控制在五句以内。");
+                await Save("tone", "以后语气委婉一点。");
+                await Save("detail_level", "以后回答简短一点。");
+                await Save("detail_level", "以后回答详细一点。");
+                var reopened = new AssistantMemoryStore(f.MemoryRoot, f.Profile);
+                Require(reopened.Entries.Count == 3 && reopened.Entries.Any(e => e == mixed)
+                    && reopened.Entries.Any(e => e.Text == "以后语气委婉一点。")
+                    && reopened.Entries.Any(e => e.Text == "以后回答详细一点。"));
+                using var capture = JsonDocument.Parse(reopened.Capture().Context);
+                var latest = capture.RootElement.GetProperty("latestPreferences").EnumerateArray()
+                    .ToDictionary(item => item.GetProperty("key").GetString()!, item => item.GetProperty("memoryId").GetString());
+                Require(latest["tone"] == reopened.Entries.Single(e => e.Text == "以后语气委婉一点。").Id
+                    && latest["detail_level"] == reopened.Entries.Single(e => e.Text == "以后回答详细一点。").Id);
+            }
+        });
         await Check("language_correction_preserves_other_expression_preferences", async () =>
         {
             foreach (string originalKey in new[] { "language", "tone" })
@@ -558,12 +588,15 @@ internal static class AutomaticPreferenceToolTests
                     current.Revision, 1, 1, InputWorkStage.Reading, current.ReceivedAt, current.ReceivedAt) }) == null);
             var response = await ((IToolModel)assistant).GenerateAsync(request, default);
             Require(response.Calls.Single().Name == "learn_preference" && f.Memory.Capture().Stamp == stamp);
-            var input = body.GetProperty("input").EnumerateArray().Select(e => e.GetProperty("content").GetString()!).ToArray();
-            Require(input.Last() == current.Body);
-            using var toolContext = JsonDocument.Parse(input[^2]);
+            var input = body.GetProperty("input").EnumerateArray().ToArray();
+            Require(input.Last().GetProperty("content").GetString() == current.Body);
+            var toolInput = input.Single(e => e.GetProperty("role").GetString() == "user"
+                && e.GetProperty("content").GetString()!.StartsWith('{'));
+            using var toolContext = JsonDocument.Parse(toolInput.GetProperty("content").GetString()!);
             Require(toolContext.RootElement.GetProperty("currentUserMessage").GetProperty("text").GetString() == current.Body
                 && toolContext.RootElement.TryGetProperty("availableTools", out _));
-            string memoryInput = input.Single(value => value.StartsWith("assistant_memory", StringComparison.Ordinal));
+            string memoryInput = input.Select(e => e.GetProperty("content").GetString()!)
+                .Single(value => value.StartsWith("assistant_memory", StringComparison.Ordinal));
             using var memoryData = JsonDocument.Parse(memoryInput[(memoryInput.IndexOf('\n') + 1)..]);
             var names = memoryData.RootElement.GetProperty("entries").EnumerateArray().Select(e => e.GetProperty("text").GetString()!).ToArray();
             Require(names.Any(value => value.Contains("赛特", StringComparison.Ordinal)) && names.Any(value => value.Contains("阿林", StringComparison.Ordinal))

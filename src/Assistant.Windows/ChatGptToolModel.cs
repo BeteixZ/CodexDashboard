@@ -169,8 +169,9 @@ internal sealed partial class ChatGptAssistant : IToolModel
                 id = request.CurrentMessage.SourceMessageId,
                 text = request.CurrentMessage.Body,
                 referencedEventId = request.CurrentMessage.ReferencedEventId,
+                occurredAt = request.CurrentMessage.OccurredAt,
                 receivedAt = request.CurrentMessage.ReceivedAt,
-                relativeDateInterpretations = RelativeDateContext.Read(request.CurrentMessage.Body, request.CurrentMessage.ReceivedAt),
+                relativeDateInterpretations = RelativeDateContext.Read(request.CurrentMessage.Body, request.CurrentMessage.OccurredAt),
                 revision = request.Revision
             }
         }, new JsonSerializerOptions { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.Create(System.Text.Unicode.UnicodeRanges.All) });

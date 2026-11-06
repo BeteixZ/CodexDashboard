@@ -737,10 +737,17 @@ public sealed class OwnedAppServerClient : IAsyncDisposable
         if (summary.Length == 0) summary = Text(message.Parameters, "reason");
         if (!canAccept) summary = "Operation details incomplete or permission expansion requested. Approval is unavailable. " + summary;
         if (summary.Length > 8192) summary = summary[..8192];
+        ImmutableArray<ApprovalDecision> decisions = canAccept
+            ? [ApprovalDecision.Accept, ApprovalDecision.AcceptForSession, ApprovalDecision.Decline, ApprovalDecision.Cancel]
+            : [ApprovalDecision.Decline, ApprovalDecision.Cancel];
+        if (message.Parameters.TryGetProperty("availableDecisions", out var offered) && offered.ValueKind != JsonValueKind.Null)
+            decisions = offered.ValueKind == JsonValueKind.Array
+                ? decisions.Where(decision => offered.EnumerateArray().Any(choice => choice.ValueKind == JsonValueKind.String
+                    && choice.GetString() == DecisionText(decision))).ToImmutableArray()
+                : [];
         approvals[token] = new(token, message.RequestId.Value.Clone(), epoch, task.Identity, turnId,
             task.Snapshot.ProjectId, task.Snapshot.Cwd, item, message.Method, summary,
-            canAccept ? [ApprovalDecision.Accept, ApprovalDecision.AcceptForSession, ApprovalDecision.Decline, ApprovalDecision.Cancel]
-                : [ApprovalDecision.Decline, ApprovalDecision.Cancel],
+            decisions,
             started + configuration.ApprovalLifetime, focusRevision, ApprovalState.Pending, details);
         Update(task, turnId, OwnedTaskState.WaitingApproval);
         Publish(null, task, turnId, message.Method, ControlState.Running, "approval_requested");

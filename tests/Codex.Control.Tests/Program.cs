@@ -219,6 +219,51 @@ try
     rpc.Emit("item/fileChange/requestApproval", new { threadId = task.Identity.ThreadId, turnId = approvalTurn,
         itemId = "known-file-details", startedAtMs = now.ToUnixTimeMilliseconds(), grantRoot = "/outside" }, 13);
     Check("file grantRoot expansion stays unavailable", !client.PendingApprovals().Single().Decisions.Contains(ApprovalDecision.AcceptForSession));
+    rpc.Emit("serverRequest/resolved", new { threadId = task.Identity.ThreadId, requestId = 13 });
+
+    void OfferedApproval(object offered, int requestId, string command = "echo synthetic")
+        => rpc.Emit("item/commandExecution/requestApproval", new
+        {
+            threadId = task.Identity.ThreadId, turnId = approvalTurn, itemId = "offered-command-" + requestId,
+            command, cwd = Request(config).Cwd, startedAtMs = now.ToUnixTimeMilliseconds(), availableDecisions = offered
+        }, requestId);
+    OfferedApproval(new[] { "accept", "acceptWithExecpolicyAmendment", "cancel" }, 101);
+    var offeredApproval = client.PendingApprovals().Single(a => a.RequestId.GetInt32() == 101);
+    Check("approval choices match actual backend offer without unsupported policy variants",
+        offeredApproval.Decisions.SequenceEqual([ApprovalDecision.Accept, ApprovalDecision.Cancel]));
+    int beforeUnsupportedResponse = rpc.Responses.Count;
+    foreach (var decision in new[] { ApprovalDecision.Decline, ApprovalDecision.AcceptForSession })
+        await Reject("backend absent decision is rejected before write " + decision,
+            () => client.RespondApprovalAsync(Guid.NewGuid(), offeredApproval.Token, task.Identity, approvalTurn, "sample", focus, decision),
+            "approval_context_mismatch");
+    Check("unsupported responses retain pending request and never write",
+        rpc.Responses.Count == beforeUnsupportedResponse && client.PendingApprovals().Any(a => a.Token == offeredApproval.Token));
+    rpc.Emit("serverRequest/resolved", new { threadId = task.Identity.ThreadId, requestId = 101 });
+
+    foreach (var (choices, id) in new (object Choices, int Id)[]
+    {
+        (Array.Empty<string>(), 102), (new[] { "acceptWithExecpolicyAmendment", "unknown-decision" }, 103),
+        ("accept", 104), (new object[] { new { acceptWithExecpolicyAmendment = new { execpolicy_amendment = new[] { "echo" } } } }, 105)
+    })
+    {
+        OfferedApproval(choices, id);
+        var unavailable = client.PendingApprovals().Single(a => a.RequestId.GetInt32() == id);
+        Check("explicit unsupported approval choices fail closed " + id, unavailable.Decisions.IsEmpty);
+        await Reject("no fallback cancel is synthesized " + id,
+            () => client.RespondApprovalAsync(Guid.NewGuid(), unavailable.Token, task.Identity, approvalTurn, "sample", focus, ApprovalDecision.Cancel),
+            "approval_context_mismatch");
+        rpc.Emit("serverRequest/resolved", new { threadId = task.Identity.ThreadId, requestId = id });
+    }
+    Check("unavailable choice lists never produce a response", rpc.Responses.Count == beforeUnsupportedResponse);
+    OfferedApproval(new[] { "accept", "acceptForSession", "decline", "cancel" }, 106, command: "");
+    Check("backend offer cannot bypass incomplete command safety restriction",
+        client.PendingApprovals().Single(a => a.RequestId.GetInt32() == 106).Decisions
+            .SequenceEqual([ApprovalDecision.Decline, ApprovalDecision.Cancel]));
+    rpc.Emit("serverRequest/resolved", new { threadId = task.Identity.ThreadId, requestId = 106 });
+    OfferedApproval(null!, 107);
+    Check("null optional offer preserves legacy supported decisions",
+        client.PendingApprovals().Single(a => a.RequestId.GetInt32() == 107).Decisions.Length == 4);
+    rpc.Emit("serverRequest/resolved", new { threadId = task.Identity.ThreadId, requestId = 107 });
     Complete(rpc, task, approvalTurn);
 
     string reportTurn = Guid.NewGuid().ToString();

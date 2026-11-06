@@ -130,7 +130,7 @@ internal sealed partial class ChatGptAssistant : IToolModel
             using var result = JsonDocument.Parse(observation.ResultJson);
             string? status = result.RootElement.GetProperty("status").GetString();
             failed |= status is "needs_confirmation" or "rejected" or "failed" or "invalid_arguments" or "capability_unavailable";
-            unknown |= status is "unknown";
+            unknown |= status is "unknown" or "unknown_needs_reconciliation";
             completed |= status is "completed";
         }
         return unknown ? "这次长期记忆是否保存成功还无法确认。下面的回复只针对当前对话。"

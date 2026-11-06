@@ -227,6 +227,11 @@ internal static class AgentAdapterTests
                 [new("m", "learn_preference", """{"status":"needs_confirmation"}""")])?.Contains("没能保存") == true);
             Check("memory_save_unknown_does_not_claim_failure", ChatGptAssistant.MemorySaveNotice(
                 [new("m", "learn_preference", """{"status":"unknown"}""")])?.Contains("无法确认") == true);
+            Check("memory_save_durable_unknown_does_not_claim_success_or_failure", ChatGptAssistant.MemorySaveNotice(
+                [new("m", "learn_preference", """{"status":"unknown_needs_reconciliation"}""")])?.Contains("无法确认") == true);
+            Check("memory_save_durable_unknown_takes_priority_over_other_successes", ChatGptAssistant.MemorySaveNotice(
+                [new("m1", "learn_preference", """{"status":"completed"}"""),
+                 new("m2", "learn_preference", """{"status":"unknown_needs_reconciliation"}""")])?.Contains("无法确认") == true);
             Check("memory_save_success_has_no_failure_notice", ChatGptAssistant.MemorySaveNotice(
                 [new("m", "learn_preference", """{"status":"completed","facts":{"saved":[]}}""")]) == null);
             Check("memory_save_mixed_outcomes_do_not_claim_all_failed", ChatGptAssistant.MemorySaveNotice(

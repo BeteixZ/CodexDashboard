@@ -171,6 +171,19 @@ class CollectorTests(unittest.TestCase):
             self.item('commandExecution', {'type': 'commandExecution', 'status': 'completed'}, i)
         self.assertEqual(self.read()['summary'], '当前进展')
 
+    def test_nonobject_history_items_do_not_abort_the_host_snapshot(self):
+        self.turn(status='completed', completed=1050)
+        self.item('agentMessage', {'type': 'agentMessage', 'text': '有效最终报告', 'phase': 'final'}, 1)
+        for ordinal, value in enumerate((None, [], 'invalid item', 42), start=2):
+            self.item('agentMessage', value, ordinal)
+        self.thread('healthy-other-task')
+        result = collector.collect(self.home, now=1100)
+        self.assertEqual([task['id'] for task in result['tasks']], ['one', 'healthy-other-task'])
+        task = result['tasks'][0]
+        self.assertEqual(task['status'], 'completed')
+        self.assertEqual(task['summary'], '有效最终报告')
+        self.assertEqual(task['finalReport'], '有效最终报告')
+
     def test_request_input_only_when_explicitly_pending(self):
         self.turn()
         self.item('dynamicToolCall', {'type': 'dynamicToolCall', 'tool': 'request_user_input', 'status': 'inProgress'})

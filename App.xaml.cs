@@ -93,8 +93,11 @@ public partial class App : Application
             };
             dashboard = new MainWindow(vm); MainWindow = dashboard;
             hud = new HudWindow(settings, vm);
-            dashboard.Show();
-            if (settings.HudVisible && settings.HudMode == "compact") hud.Show();
+            if (!e.Args.Contains("--background"))
+            {
+                dashboard.Show();
+                if (settings.HudVisible && settings.HudMode == "compact") hud.Show();
+            }
             if (smoke)
             {
                 int index = Array.IndexOf(e.Args, "--smoke-test");
@@ -129,7 +132,7 @@ public partial class App : Application
         {
             Directory.CreateDirectory(Settings.DirectoryPath);
             File.WriteAllText(Path.Combine(Settings.DirectoryPath, "startup-error.txt"), ex.ToString());
-            if (!smoke) MessageBox.Show("启动失败：" + ex.Message, "Codex Dashboard");
+            if (!smoke && !e.Args.Contains("--background")) MessageBox.Show("启动失败：" + ex.Message, "Codex Dashboard");
             Exiting = true; Shutdown(1);
         }
     }

@@ -405,6 +405,8 @@ def collect(home: Optional[Union[str, pathlib.Path]] = None, limit: int = 120, n
                         item = json.loads(itemrow['item_json'])
                     except (ValueError, TypeError):
                         continue
+                    if not isinstance(item, dict):
+                        continue
                     created = timestamp(itemrow['created_at_ms'], milliseconds=True)
                     last_activity = max(last_activity, created)
                     summary = summarize_item(item, created)

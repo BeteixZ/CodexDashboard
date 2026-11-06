@@ -183,7 +183,7 @@ def check_output(stdout, count):
             raise AssertionError("Turn identity, terminal state, or final report was corrupted.")
     if b"SYNTHETIC_EXCLUDED_" in stdout:
         raise AssertionError("Excluded synthetic analysis/command data leaked into results.")
-    if document["truncated"] != (count >= LIMIT):
+    if document["truncated"] != (count > LIMIT):
         raise AssertionError("Unexpected collector truncation flag.")
     document.pop("collectedAt")
     return sha(canonical(document))
@@ -285,7 +285,7 @@ def main():
             "io": "GetProcessIoCounters logical transfer bytes include interpreter/SQLite/rollout reads; not physical disk traffic.",
             "memory": "GetProcessMemoryInfo sampled every approximately 5 ms; observed child peaks and observed simultaneous batch total are distinct lower bounds.",
             "cache": "One single and one dual warmup before each ABBA series. OS cache is not flushed; no cold-cache claim.",
-            "limit": "120 candidates returns 120; 500 candidates also returns 120. The collector reports truncated=true at exactly its limit too.",
+            "limit": "Both fixtures return at most 120 tasks. Truncated is true only when additional main tasks are omitted.",
             "scope": "Local synthetic indexed SQLite and rollout files. No SSH, UI, IPC, live writes, credentials, real task state or CPU isolation.",
         }, "datasets": []}
     try:
@@ -293,7 +293,7 @@ def main():
             home = output / f"synthetic-home-{count}"
             before = fixture(home, count)
             dataset = {"candidateThreads": count, "returnedThreads": min(count, LIMIT),
-                       "omittedCandidateThreads": max(0, count - LIMIT), "reportedTruncated": count >= LIMIT,
+                       "omittedCandidateThreads": max(0, count - LIMIT), "reportedTruncated": count > LIMIT,
                        "historyTurnsPerThread": 3, "historyItemsPerTurn": 12,
                        "fixtureBefore": before, "warmups": [], "rounds": []}
             report["datasets"].append(dataset)
@@ -345,7 +345,7 @@ def main():
                          f"{summary['observed_combined_working_set_peak_bytes']['mean'] / 1024**2:.2f} |")
     lines += ["", "Both fixtures and all normalized output hashes remained unchanged. Only `collectedAt` is excluded from result hashing.",
               "500 candidates still returns 120 tasks; the omitted 380 task rollouts are not processed or displayed.",
-              "The collector reports `truncated=true` for both fixtures, including exactly 120 candidates.",
+              "The collector reports `truncated=false` for exactly 120 candidates and `truncated=true` for 500 candidates.",
               "See benchmark.json for each child, round distributions, source hash and measurement definitions."]
     (output / "summary.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 

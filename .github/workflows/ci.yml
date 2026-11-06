@@ -51,5 +51,12 @@ jobs:
             ${{ runner.temp }}/project-checks/readonly/readonly-checks.json
             ${{ runner.temp }}/project-checks/assistant-input-merge/input-merge-boundary-checks.json
             ${{ runner.temp }}/project-checks/assistant-dependency-recovery/dependency-recovery-checks.json
+            ${{ runner.temp }}/project-checks/assistant-commitment-budget/commitment-budget-runtime-checks.json
+            ${{ runner.temp }}/project-checks/assistant-commitment-runtime/commitment-runtime-checks.json
+            ${{ runner.temp }}/project-checks/assistant-commitment-policy/commitment-policy-runtime-checks.json
+            ${{ runner.temp }}/project-checks/assistant-commitment-channel/commitment-channel-race-checks.json
+            ${{ runner.temp }}/project-checks/assistant-recovery-inspection/inspection-checks.json
+            ${{ runner.temp }}/project-checks/assistant-adapter/adapter-checks.json
+            ${{ runner.temp }}/project-checks/assistant-preference-tools/preference-tool-checks.json
           if-no-files-found: warn
           retention-days: 14

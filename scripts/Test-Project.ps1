@@ -76,6 +76,13 @@ try {
     $assistantAssembly = Join-Path $repository "src/Assistant.Windows/bin/$Configuration/net10.0-windows/CodexAssistant.dll"
     Invoke-Check -Name 'assistant-input-merge' -Executable 'dotnet' -Arguments @($assistantAssembly, '--input-merge-boundary-test', (Join-Path $output 'assistant-input-merge'))
     Invoke-Check -Name 'assistant-dependency-recovery' -Executable 'dotnet' -Arguments @($assistantAssembly, '--dependency-recovery-test', (Join-Path $output 'assistant-dependency-recovery'))
+    Invoke-Check -Name 'assistant-commitment-budget' -Executable 'dotnet' -Arguments @($assistantAssembly, '--commitment-budget-runtime-test', (Join-Path $output 'assistant-commitment-budget'))
+    Invoke-Check -Name 'assistant-commitment-runtime' -Executable 'dotnet' -Arguments @($assistantAssembly, '--commitment-runtime-test', (Join-Path $output 'assistant-commitment-runtime'))
+    Invoke-Check -Name 'assistant-commitment-policy' -Executable 'dotnet' -Arguments @($assistantAssembly, '--commitment-policy-runtime-test', (Join-Path $output 'assistant-commitment-policy'))
+    Invoke-Check -Name 'assistant-commitment-channel' -Executable 'dotnet' -Arguments @($assistantAssembly, '--commitment-channel-race-test', (Join-Path $output 'assistant-commitment-channel'))
+    Invoke-Check -Name 'assistant-recovery-inspection' -Executable 'dotnet' -Arguments @($assistantAssembly, '--ledger-inspection-test', (Join-Path $output 'assistant-recovery-inspection'))
+    Invoke-Check -Name 'assistant-adapter' -Executable 'dotnet' -Arguments @($assistantAssembly, '--agent-adapter-test', (Join-Path $output 'assistant-adapter'))
+    Invoke-Check -Name 'assistant-preference-tools' -Executable 'dotnet' -Arguments @($assistantAssembly, '--automatic-preference-tools-test', (Join-Path $output 'assistant-preference-tools'))
     [ordered]@{ syntheticOnly = $true; completed = $true; passed = $true; startedAt = $started; completedAt = [DateTimeOffset]::UtcNow; checks = @($results.ToArray()) } |
         ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $output 'summary.json') -Encoding utf8
     Write-Host "All isolated project checks passed. Evidence: $output"

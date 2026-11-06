@@ -225,6 +225,153 @@ internal static class AutomaticPreferenceToolTests
                     && latest["detail_level"] == reopened.Entries.Single(e => e.Text == "以后回答详细一点。").Id);
             }
         });
+        foreach (var pair in new[]
+        {
+            (Name: "detail_questions", First: "detail_level", Second: "conversation_questions",
+                Original: "以后回答控制在三句以内，不要追问。",
+                FirstCorrection: "以后回答详细展开。", SecondCorrection: "以后缺少关键信息时可以追问。",
+                FinalCorrection: "以后回答控制在五句以内。", SecondFinalCorrection: "以后别在结尾反问我。"),
+            (Name: "math_layout", First: "math_format", Second: "report_layout",
+                Original: "以后数学公式用 LaTeX，回答用列表排版。",
+                FirstCorrection: "以后数学公式用美元符号。", SecondCorrection: "以后回复不用列表，改用分行排版。",
+                FinalCorrection: "以后数学公式用 LaTeX。", SecondFinalCorrection: "以后回复用表格排版。"),
+            (Name: "order_layout", First: "report_order", Second: "report_layout",
+                Original: "以后汇报先说结论，再列依据，回复用分行排版。",
+                FirstCorrection: "以后汇报先列依据，再说结论。", SecondCorrection: "以后回复用列表排版。",
+                FinalCorrection: "以后汇报先说结论，再列依据。", SecondFinalCorrection: "以后回复用表格排版。")
+        })
+        foreach (bool reverse in new[] { false, true })
+        {
+            string originalKey = reverse ? pair.Second : pair.First;
+            await Check("mixed_" + pair.Name + "_" + originalKey + "_survives_corrections_reopen_and_new_dialogue", async () =>
+            {
+                await using var f = await New();
+                string otherKey = reverse ? pair.First : pair.Second;
+                var initial = await f.RunHttp(pair.Original, [Call("learn_preference", new
+                {
+                    preferences = new[] { new { key = originalKey, evidence = pair.Original }, new { key = otherKey, evidence = pair.Original } }
+                })]);
+                if (initial.Result.State != ToolLoopState.Completed || f.Memory.Entries.Count != 1
+                    || f.Memory.Entries.Single().Text != pair.Original) throw new InvalidOperationException("mixed_initial_save_failed");
+                var mixed = f.Memory.Entries.Single();
+                async Task Save(string key, string evidence)
+                {
+                    var saved = await f.RunHttp(evidence, [Learn(evidence, key)]);
+                    var state = await f.Read();
+                    if (saved.Result.State != ToolLoopState.Completed || state.Operations.Last().Stage != OperationStage.Completed)
+                        throw new InvalidOperationException("mixed_correction_not_completed_" + key);
+                    if (state.Authorizations.Last().SourceExcerpt != evidence)
+                        throw new InvalidOperationException("mixed_correction_source_changed_" + key);
+                    if (!f.Memory.Entries.Any(entry => entry == mixed))
+                        throw new InvalidOperationException("mixed_original_overwritten_after_" + key);
+                }
+                await Save(originalKey, reverse ? pair.SecondCorrection : pair.FirstCorrection);
+                await Save(otherKey, reverse ? pair.FirstCorrection : pair.SecondCorrection);
+                await Save(pair.First, pair.FinalCorrection);
+                await Save(pair.Second, pair.SecondFinalCorrection);
+                var reopened = new AssistantMemoryStore(f.MemoryRoot, f.Profile);
+                Require(reopened.Entries.Count == 3 && reopened.Entries.Any(entry => entry == mixed)
+                    && reopened.Entries.Single(entry => entry.PreferenceKey == pair.First && entry.Id != mixed.Id).Text == pair.FinalCorrection
+                    && reopened.Entries.Single(entry => entry.PreferenceKey == pair.Second && entry.Id != mixed.Id).Text == pair.SecondFinalCorrection);
+                await f.Reopen();
+                var reset = await f.Receive("新对话");
+                var boundary = await f.Ledger.BeginNewDialogueAsync(Id, reset.SourceMessageId);
+                var next = await f.RunHttp("按我保存的交流偏好回答。", []);
+                var input = next.Request.GetProperty("input").EnumerateArray().ToArray();
+                string memoryInput = input.Select(item => item.GetProperty("content").GetString()!)
+                    .Single(value => value.StartsWith("assistant_memory", StringComparison.Ordinal));
+                using var context = JsonDocument.Parse(memoryInput[(memoryInput.IndexOf('\n') + 1)..]);
+                var latest = context.RootElement.GetProperty("latestPreferences").EnumerateArray()
+                    .ToDictionary(item => item.GetProperty("key").GetString()!, item => item.GetProperty("memoryId").GetString());
+                Require(next.Result.State == ToolLoopState.Completed && boundary.Epoch == 1
+                    && context.RootElement.GetProperty("entries").EnumerateArray().Any(item => item.GetProperty("id").GetString() == mixed.Id
+                        && item.GetProperty("text").GetString() == pair.Original)
+                    && latest[pair.First] == reopened.Entries.Single(entry => entry.Text == pair.FinalCorrection).Id
+                    && latest[pair.Second] == reopened.Entries.Single(entry => entry.Text == pair.SecondFinalCorrection).Id
+                    && f.TransportCalls == 0);
+            });
+        }
+        await Check("single_layout_correction_does_not_misread_future_marker_as_order", async () =>
+        {
+            await using var f = await New();
+            await f.RunHttp("以后回复用列表排版。", [Learn("以后回复用列表排版。")]);
+            string id = f.Memory.Entries.Single().Id;
+            await f.RunHttp("以后回复用分行排版。", [Learn("以后回复用分行排版。")]);
+            var reopened = new AssistantMemoryStore(f.MemoryRoot, f.Profile);
+            Require(reopened.Entries.Single().Id == id && reopened.Entries.Single().Text == "以后回复用分行排版。");
+        });
+        foreach (var item in new[]
+        {
+            (Key: "math_format", Original: "以后数学公式用 LaTeX 格式。", Correction: "以后数学公式用美元符号。"),
+            (Key: "report_order", Original: "以后汇报先说结论的格式。", Correction: "以后汇报先列依据，再说结论。"),
+            (Key: "conversation_questions", Original: "以后不要用反问句。", Correction: "以后缺少关键信息时可以追问。"),
+            (Key: "report_layout", Original: "以后汇报结果用表格排版。", Correction: "以后汇报用分行排版。")
+        })
+        await Check("single_" + item.Key + "_format_correction_replaces_prior_row", async () =>
+        {
+            await using var f = await New();
+            await f.RunHttp(item.Original, [Learn(item.Original, item.Key)]);
+            string id = f.Memory.Entries.Single().Id;
+            await f.RunHttp(item.Correction, [Learn(item.Correction, item.Key)]);
+            var reopened = new AssistantMemoryStore(f.MemoryRoot, f.Profile);
+            Require(reopened.Entries.Count == 1 && reopened.Entries.Single().Id == id
+                && reopened.Entries.Single().Text == item.Correction);
+        });
+        foreach (bool failFinal in new[] { false, true })
+        await Check("mixed_correction_unknown_receipt_" + (failFinal ? "model_unavailable" : "explicit_notice") + "_preserves_original_and_is_not_replayed", async () =>
+        {
+            await using var f = await New();
+            const string original = "以后数学公式用 LaTeX，回答用列表排版。";
+            const string correction = "以后数学公式用美元符号。";
+            await f.RunHttp(original, [Learn(original, "math_format")]);
+            var mixed = f.Memory.Entries.Single();
+            f.ThrowAfterSave = true;
+            var interrupted = await f.RunHttp(correction, [Learn(correction, "math_format")], failFinal: failFinal, source: "mixed-unknown");
+            var state = await f.Read();
+            File.WriteAllText(Path.Combine(f.Directory, "mixed-receipt-evidence.json"), JsonSerializer.Serialize(new
+            {
+                failFinal, result = interrupted.Result.State.ToString(), interrupted.Result.Reason,
+                operation = state.Operations.Last().Stage.ToString(), originalPreserved = f.Memory.Entries.Any(entry => entry == mixed),
+                replies = interrupted.Result.Outbox.Select(entry => entry.Body),
+                observations = interrupted.Result.Observations.Select(entry => new { entry.ToolName, entry.ResultJson })
+            }, Settings.Json));
+            Require(interrupted.Result.State == (failFinal ? ToolLoopState.ModelUnavailable : ToolLoopState.Completed)
+                && state.Operations.Last().Stage == OperationStage.Unknown
+                && state.Authorizations.Last().SourceExcerpt == correction
+                && f.Memory.Entries.Any(entry => entry == mixed)
+                && f.Memory.Entries.Single(entry => entry.Id != mixed.Id).Text == correction
+                && !state.Events.Any(entry => entry.Source == ConversationSource.Assistant
+                    && entry.Body.Contains("已保存", StringComparison.Ordinal))
+                && (failFinal || interrupted.Result.Outbox.Any(entry => entry.Body.Contains("是否保存成功还无法确认", StringComparison.Ordinal))));
+            string stamp = f.Memory.Capture().Stamp;
+            f.ThrowAfterSave = false;
+            await f.Reopen();
+            int executions = f.ToolExecutions;
+            bool repliedSourceRejected = false;
+            try { await f.Run(correction, [Learn(correction, "math_format")], source: "mixed-unknown"); }
+            catch (LedgerException error) when (!failFinal && error.Code == LedgerErrors.InvalidTransition)
+            { repliedSourceRejected = true; }
+            Require(f.Memory.Capture().Stamp == stamp && (await f.Read()).Operations.Last().Stage == OperationStage.Unknown
+                && f.ToolExecutions == executions && (failFinal || repliedSourceRejected)
+                && new AssistantMemoryStore(f.MemoryRoot, f.Profile).Entries.Any(entry => entry == mixed));
+        });
+        await Check("mixed_correction_capacity_denial_has_truthful_receipt_without_losing_original", async () =>
+        {
+            await using var f = await New();
+            const string original = "以后数学公式用 LaTeX，回答用列表排版。";
+            const string correction = "以后数学公式用美元符号。";
+            await f.RunHttp(original, [Learn(original, "math_format")]);
+            var mixed = f.Memory.Entries.Single();
+            for (int i = f.Memory.Entries.Count; i < AssistantMemoryStore.MaxEntries; i++) f.Memory.Add("容量占位 " + i);
+            string stamp = f.Memory.Capture().Stamp;
+            var denied = await f.RunHttp(correction, [Learn(correction, "math_format")]);
+            var state = await f.Read();
+            Require(f.Memory.Capture().Stamp == stamp && f.Memory.Entries.Any(entry => entry == mixed)
+                && !f.Memory.Entries.Any(entry => entry.Text == correction)
+                && state.Operations.Last().Stage == OperationStage.Failed
+                && denied.Result.Outbox.Any(entry => entry.Body.Contains("没能保存到长期记忆", StringComparison.Ordinal))
+                && !denied.Result.Outbox.Any(entry => entry.Body.Contains("已保存", StringComparison.Ordinal)));
+        });
         await Check("language_correction_preserves_other_expression_preferences", async () =>
         {
             foreach (string originalKey in new[] { "language", "tone" })
@@ -693,6 +840,37 @@ internal static class AutomaticPreferenceToolTests
         {
             var current = await Receive(body, source, trust);
             return await Loop(new Script(calls, beforeReturn, failFinal), capture).RunAsync(Id, current.SourceMessageId);
+        }
+        internal async Task<(ToolLoopResult Result, JsonElement Request)> RunHttp(string body, ModelToolCall[] calls,
+            bool failFinal = false, string? source = null)
+        {
+            string vault = Path.Combine(Directory, "synthetic-loop.credentials");
+            new ChatGptVault { Accounts = new() { new ChatGptAccount { ClientId = Settings.ChatGpt.ActiveAccount,
+                Subject = "synthetic", AccessToken = "SYNTHETIC_ONLY", Scope = ChatGptAuth.Scopes,
+                ExpiresAt = DateTimeOffset.UtcNow.AddHours(1) } } }.Save(vault);
+            int requests = 0;
+            JsonElement lastRequest = default;
+            using var assistant = new ChatGptAssistant(Settings, () => { }, new ChatGptAuth(vault),
+                new HttpStub(async (request, ct) =>
+                {
+                    using var parsed = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(ct));
+                    lastRequest = parsed.RootElement.Clone();
+                    bool propose = ++requests == 1 && calls.Length > 0;
+                    if (!propose && failFinal) throw new IOException("synthetic_final_http_unavailable");
+                    return Response(JsonSerializer.Serialize(new
+                    {
+                        calls = (propose ? calls : []).Select(call => new { id = call.Id, name = call.Name, argumentsJson = call.ArgumentsJson }),
+                        replies = propose ? Array.Empty<string>() : new[] { "合成测试回复。" }
+                    }));
+                }), Memory);
+            var current = await Receive(body, source);
+            var result = await Loop(assistant).RunAsync(Id, current.SourceMessageId);
+            foreach (var output in result.Outbox)
+            {
+                await Ledger.BeginOutboxSendAsync(Id, output.Id);
+                await Ledger.RecordOutboxOutcomeAsync(Id, output.Id, OutboxStage.Accepted, "synthetic channel acceptance; no WeChat send");
+            }
+            return (result, lastRequest);
         }
         internal async Task<Prepared> Prepare(string body, ModelToolCall proposed, bool capture, bool dispatch = true)
         {

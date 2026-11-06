@@ -185,6 +185,22 @@ internal static class AutomaticPreferenceText
         StableDeclaration(new("detail_level", text))
         // "简短" alone describes length. Require a separate tone cue.
         && Regex.IsMatch(text, @"语气|口吻|风格|自然|直接|直来直去|温柔|严肃|客气|亲切|熟人|委婉", RegexOptions.CultureInvariant);
+    internal static bool IsMixedDetailAndQuestionPreference(string text) =>
+        StableDeclaration(new("detail_level", text)) && StableDeclaration(new("conversation_questions", text))
+        // "反问句" alone contains "句", but does not set the reply length.
+        && Regex.IsMatch(text, @"详细|简短|简洁|展开|篇幅|字数|句数|段数|长度|长一点|短一点|[0-9一二两三四五六七八九十百千万几]+(?:个)?[字句段]", RegexOptions.CultureInvariant);
+    internal static bool IsMixedMathAndLayoutPreference(string text) =>
+        StableDeclaration(new("math_format", text)) && StableDeclaration(new("report_layout", text))
+        && HasIndependentLayoutCue(text);
+    internal static bool IsMixedOrderAndLayoutPreference(string text) =>
+        StableDeclaration(new("report_order", text)) && StableDeclaration(new("report_layout", text))
+        && HasIndependentLayoutCue(text)
+        // Mentioning "结果" or the "后" in "以后" does not set an order.
+        && Regex.IsMatch(text, @"(?:先|首先|优先).{0,12}(?:结论|结果|依据)|(?:结论|结果|依据).{0,12}(?:在前|在后|先行|置前|置后)|顺序", RegexOptions.CultureInvariant);
+    // Generic "格式" can describe math or ordering alone. This only limits
+    // retention of composite entries; preference eligibility stays unchanged.
+    private static bool HasIndependentLayoutCue(string text) =>
+        Regex.IsMatch(text, @"分行|换行|分段|段落|列表|小标题|表格|栏目", RegexOptions.CultureInvariant);
     private static bool StableDeclaration(AutomaticPreference preference)
     {
         string text = preference.Evidence;

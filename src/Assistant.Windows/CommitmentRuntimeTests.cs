@@ -116,8 +116,8 @@ internal static class CommitmentRuntimeTests
                 && schedule.DueAtUtc >= schedule.ReferenceTimeUtc.AddMinutes(1)
                 && schedule.DueAtUtc - schedule.ReferenceTimeUtc < TimeSpan.FromSeconds(61)
                 && schedule.TimeZoneId == TimeZoneInfo.Local.Id);
-            Check("creation_receipt_contains_actual_local_time_and_id",
-                f.Sent.Any(body => body.Contains(work.Id.ToString(), StringComparison.Ordinal)
+            Check("creation_receipt_contains_actual_local_time_and_goal",
+                f.Sent.Any(body => body.Contains(work.Goal, StringComparison.Ordinal)
                     && body.Contains(DateTime.Parse(schedule.LocalTime, System.Globalization.CultureInfo.InvariantCulture).ToString("yyyy年MM月dd日 HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture), StringComparison.Ordinal)));
             await f.InputAsync("reminder-create", text);
             Check("duplicate_input_does_not_create_second_reminder", (await f.ReadAsync()).WorkItems.Length == 1);

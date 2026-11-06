@@ -20,7 +20,9 @@ internal sealed partial class DurableAssistantRuntime
     {
         var cancellation = new CancellationTokenSource();
         commitmentLifetime = cancellation;
-        commitmentWorker = Task.Run(() => CommitmentLoopAsync(active, cancellation.Token));
+        commitmentWorker = Task.WhenAll(
+            Task.Run(() => CommitmentLoopAsync(active, cancellation.Token)),
+            Task.Run(() => CommitmentCheckLoopAsync(active, cancellation.Token)));
         dependentWorker = Task.Run(() => DependencyLoopAsync(active, cancellation.Token));
     }
     private Task StopCommitmentSessionAsync()
@@ -55,6 +57,40 @@ internal sealed partial class DurableAssistantRuntime
                         await ledger.ObserveCommitmentTaskAsync(active, observation, ct);
                 }
                 await ledger.AdvanceCommitmentsAsync(active, 32, ct);
+                foreach (var draft in await ledger.GetPendingCommitmentNotificationsAsync(active, ct))
+                {
+                    if (!await OnUi(() => Task.FromResult(IsCurrentBinding(active)), ct)) break;
+                    // Core supplied factual text; this path has no model call or
+                    // control execution, and never replays the creation message.
+                    await ledger.FinalizeNotificationFallbackAsync(active, draft.Id, draft.ContextBody,
+                        WeChatReports.Pages(draft.ContextBody), ct);
+                }
+                if (Identity == active && (saved.WorkItems.Length > 0 || saved.Runs.Length > 0))
+                    coordinator.NotifyDeliveryAvailable(active);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
+            catch (LedgerException error) when (error.Code is LedgerErrors.NotificationSuppressed
+                or LedgerErrors.BudgetDeferred or LedgerErrors.StaleRevision)
+            { /* A user change invalidated a pending observation/preparation. */ }
+            catch
+            {
+                LastError = "commitment_processing_unavailable";
+                failed = true;
+            }
+            try { await Task.Delay(failed ? TimeSpan.FromSeconds(5) : TimeSpan.FromSeconds(1), ct); }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
+        }
+    }
+
+    private async Task CommitmentCheckLoopAsync(ConversationIdentity active, CancellationToken ct)
+    {
+        // A slow read must retain its lease without stopping unrelated reminders.
+        // This worker remains part of commitmentWorker, so session shutdown drains it.
+        while (!ct.IsCancellationRequested && Identity == active)
+        {
+            bool failed = false;
+            try
+            {
                 foreach (var pending in (await ledger.GetPendingCommitmentChecksAsync(active, ct)).Take(8))
                 {
                     if (!await OnUi(() => Task.FromResult(IsCurrentBinding(active)), ct)) break;
@@ -76,29 +112,18 @@ internal sealed partial class DurableAssistantRuntime
                     }
                     finally
                     {
-                        // Cancellation is not proof the underlying read stopped.
-                        // This finally runs only after the actual await returned.
+                        // Release only after the actual adapter await returned.
                         await ledger.ReleaseCommitmentCheckAsync(claim, CancellationToken.None);
                     }
                 }
-                foreach (var draft in await ledger.GetPendingCommitmentNotificationsAsync(active, ct))
-                {
-                    if (!await OnUi(() => Task.FromResult(IsCurrentBinding(active)), ct)) break;
-                    // Core supplied factual text; this path has no model call or
-                    // control execution, and never replays the creation message.
-                    await ledger.FinalizeNotificationFallbackAsync(active, draft.Id, draft.ContextBody,
-                        WeChatReports.Pages(draft.ContextBody), ct);
-                }
-                if (Identity == active && (saved.WorkItems.Length > 0 || saved.Runs.Length > 0))
-                    coordinator.NotifyDeliveryAvailable(active);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
-            catch (LedgerException error) when (error.Code is LedgerErrors.NotificationSuppressed
-                or LedgerErrors.BudgetDeferred or LedgerErrors.StaleRevision)
-            { /* A user change invalidated a pending observation/preparation. */ }
+            catch (LedgerException error) when (error.Code is LedgerErrors.BudgetDeferred
+                or LedgerErrors.StaleRevision or LedgerErrors.InvalidTransition)
+            { /* Current user changes or another observation may retire the check. */ }
             catch
             {
-                LastError = "commitment_processing_unavailable";
+                LastError = "commitment_check_processing_unavailable";
                 failed = true;
             }
             try { await Task.Delay(failed ? TimeSpan.FromSeconds(5) : TimeSpan.FromSeconds(1), ct); }

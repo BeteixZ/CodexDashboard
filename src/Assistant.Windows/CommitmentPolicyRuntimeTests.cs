@@ -218,8 +218,8 @@ internal static class CommitmentPolicyRuntimeTests
                 && saved.CommitmentRuns.Single().Stage == CommitmentRunStage.Cancelled
                 && saved.NotificationDrafts.Single().Cancelled && saved.Operations.Length == 3
                 && saved.Operations.All(item => item.Stage == OperationStage.Completed)
-                && f.Sent.Last().Contains("历史", StringComparison.Ordinal)
-                && f.Sent.Last().Contains("任务", StringComparison.Ordinal));
+                && f.Sent.Last().Contains("已取消", StringComparison.Ordinal)
+                && f.Sent.Last().Contains(original.Goal, StringComparison.Ordinal) && control.Calls == 0);
             clock.Advance(TimeSpan.FromHours(4)); // Outside the former quiet interval.
             await InputAsync(f, "deleted-list", "事项列表");
             await Task.Delay(1200);

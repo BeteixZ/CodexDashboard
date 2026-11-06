@@ -75,6 +75,88 @@ internal static class CommitmentBudgetRuntimeTests
         await SharedNotificationsAsync(Path.Combine(directory, "shared-notifications"), Check);
         await UnknownConsumesBudgetAsync(Path.Combine(directory, "unknown-notification"), Check);
         await ActualReadDrainAsync(Path.Combine(directory, "owned-read-drain"), Check);
+        await ReadDoesNotBlockRemindersAsync(Path.Combine(directory, "independent-reminder"), Check);
+    }
+
+    private static async Task ReadDoesNotBlockRemindersAsync(string directory, Action<string, bool> check)
+    {
+        var clock = new Clock();
+        var profile = OwnedHostRuntimeTests.Profile(Path.Combine(directory, "fixture"), verified: true);
+        Directory.CreateDirectory(profile.Creation.Cwd);
+        IgnoringCancellationRpc? rpc = null;
+        var options = new OwnedHostOptions(Path.Combine(directory, "owned"), [profile], (configured, _) =>
+        {
+            rpc = new(new(configured.Configuration, () => Task.FromResult(true)));
+            return Task.FromResult<IJsonRpcConnection>(rpc);
+        });
+        await using var f = await DurableRuntimeTests.Fixture.CreateAsync(Path.Combine(directory, "fixture"),
+            ownedOptions: options, clock: clock, ledgerOptions: Limits());
+        f.Settings.ChatGpt.TaskControlEnabled = true;
+        await OwnedHostRuntimeTests.SendToolAsync(f, "create", "新建 demo",
+            _ => OwnedHostRuntimeTests.Call("create_task", new { configurationId = "demo" }));
+        var runtime = f.Runtime.OwnedRuntime!;
+        var task = runtime.Tasks().Single();
+        string thread = task.Handle.Identity.ThreadId;
+        string instruction = "继续 " + thread + " 检查合成任务";
+        await OwnedHostRuntimeTests.SendToolAsync(f, "start", instruction,
+            _ => OwnedHostRuntimeTests.ContinueCall(runtime.Tasks().Single(), instruction));
+        task = runtime.Tasks().Single();
+        string turn = task.Snapshot.CurrentTurnId!;
+        rpc!.Inner.SetThread(thread, task.Snapshot.Cwd, OwnedHostRuntimeTests.FakeRpc.Turn(turn, "inProgress"));
+        rpc.Inner.Emit("turn/started", new { threadId = thread, turn = OwnedHostRuntimeTests.FakeRpc.Turn(turn, "inProgress") });
+        await WaitAsync(() => Task.FromResult(runtime.Tasks().Single().Snapshot.State == OwnedTaskState.Running));
+        f.Settings.ChatGpt.Enabled = false;
+        int modelCalls = f.Script.Calls;
+        await InputAsync(f, "subscribe", thread + "一分钟没动静检查一下");
+        var identity = f.Runtime.Identity!;
+        var before = await f.ReadAsync();
+        clock.Set(before.Subscriptions.Single().NextCheckAt.AddSeconds(1));
+        Task? stopping = null;
+        try
+        {
+            await rpc.ReadEntered.Task.WaitAsync(TimeSpan.FromSeconds(12));
+            await InputAsync(f, "independent-reminder", "一分钟后提醒我核对独立提醒");
+            var schedule = (await f.ReadAsync()).Schedules.Single();
+            clock.Set(schedule.DueAtUtc.AddSeconds(1));
+            try
+            {
+                await WaitAsync(async () => (await f.ReadAsync()).Outbox.Any(o =>
+                    o.Kind == OutboxKind.Notification && o.Stage == OutboxStage.Accepted && o.Body == "核对独立提醒"));
+            }
+            catch (TimeoutException)
+            {
+                check("slow_task_check_does_not_block_an_unrelated_due_reminder", false);
+                throw;
+            }
+            var saved = await f.ReadAsync();
+            check("slow_task_check_does_not_block_an_unrelated_due_reminder",
+                rpc.ActiveReads == 1 && rpc.ReadCalls == 1
+                && saved.CommitmentRuns.Single(r => r.WorkItemId == before.WorkItems.Single().Id).Stage == CommitmentRunStage.Checking
+                && saved.WorkItems.Single(w => w.Id == schedule.WorkItemId).Stage == TrackedWorkStage.Completed
+                && f.Sent.Count(s => s == "核对独立提醒") == 1 && f.Script.Calls == modelCalls
+                && (await f.Ledger.GetCommitmentBudgetStatusAsync(identity)).ReadChecksInFlight == 1);
+            await InputAsync(f, "cancel-slow-check", "取消订阅 " + before.WorkItems.Single().Id.ToString("D"));
+            await WaitAsync(async () => (await f.ReadAsync()).WorkItems.Single(w => w.Id == before.WorkItems.Single().Id)
+                .Stage == TrackedWorkStage.Cancelled);
+            check("cancelling_a_slow_check_retains_occupancy_until_the_read_ends",
+                rpc.ActiveReads == 1 && rpc.ReadCalls == 1
+                && (await f.Ledger.GetCommitmentBudgetStatusAsync(identity)).ReadChecksInFlight == 1);
+            stopping = f.Runtime.StopSessionAsync();
+            await rpc.CancellationObserved.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await Task.Delay(100);
+            check("independent_scheduler_shutdown_still_drains_the_actual_read",
+                !stopping.IsCompleted && rpc.ActiveReads == 1 && !rpc.Inner.Disposed);
+        }
+        finally
+        {
+            rpc.ReleaseRead.TrySetResult();
+            await rpc.ReadFinished.Task.WaitAsync(TimeSpan.FromSeconds(8));
+            if (stopping != null) await stopping.WaitAsync(TimeSpan.FromSeconds(8));
+        }
+        var after = await f.Ledger.ReadConversationAsync(identity);
+        check("independent_reminder_keeps_one_delivery_after_read_drain",
+            after.Outbox.Count(o => o.Kind == OutboxKind.Notification && o.Stage == OutboxStage.Accepted) == 1
+            && (await f.Ledger.GetCommitmentBudgetStatusAsync(identity)).ReadChecksInFlight == 0);
     }
 
     private static async Task CreatePairAsync(DurableRuntimeTests.Fixture f, Clock clock)

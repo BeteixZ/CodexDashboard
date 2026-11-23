@@ -19,7 +19,7 @@
     <ProjectReference Include="../Codex.Migration/Codex.Migration.csproj" />
     <ProjectReference Include="../Assistant.Core/Assistant.Core.csproj" />
     <ProjectReference Include="../Codex.Control/Codex.Control.csproj" />
-    <PackageReference Include="QRCoder" Version="1.8.1" />
+    <PackageReference Include="QRCoder" Version="1.9.0" />
     <PackageReference Include="PdfPig" Version="0.1.16" />
     <PackageReference Include="Microsoft.IdentityModel.JsonWebTokens" Version="8.23.0" />
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
